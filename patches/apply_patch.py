@@ -237,7 +237,7 @@ new_update_method = """    public static void updateTerrainFragments() {
     }
 
 """
-source = source.slice(0, a) + new_update_method + source.slice(b);
+source = source[:a] + new_update_method + source[b:];
 effect.write_text(source, encoding="utf-8");
 
 # Replace the original renderer with six true tetrahedral wedges. Exterior faces retain the block

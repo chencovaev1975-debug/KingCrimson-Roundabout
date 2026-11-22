@@ -285,7 +285,10 @@ new_renderer = """    @Unique
                         LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
                 );
                 poseStack.popPose();
+                poseStack.pushPose();
+                poseStack.mulPose(Axis.YP.rotationDegrees(frag.rotZ));
                 rdbt$renderCrackLines(poseStack, buffer, frag.age);
+                poseStack.popPose();
             } else {
                 // Stage 2: four large textured chunks separate from the source block.
                 // Their size and spacing are intentionally substantial, not tiny chips.
@@ -326,16 +329,40 @@ new_renderer = """    @Unique
     private void rdbt$renderCrackLines(PoseStack poseStack, MultiBufferSource buffer, int age) {
         VertexConsumer lines = buffer.getBuffer(RenderType.lines());
         Matrix4f matrix = poseStack.last().pose();
-        float spread = Math.min(0.46F, 0.12F + age * 0.022F);
+        float spread = Math.min(1.0F, 0.34F + age * 0.042F);
         float lift = 0.503F;
-        // Dark, branching fissures on the upper surface, widening during the crack phase.
-        rdbt$crackSegment(lines, matrix, -spread, lift, -0.08F, -0.05F, lift, 0.02F);
-        rdbt$crackSegment(lines, matrix, -0.05F, lift, 0.02F, 0.12F, lift, 0.13F);
-        rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, spread, lift, 0.30F);
-        rdbt$crackSegment(lines, matrix, -0.05F, lift, 0.02F, -0.20F, lift, 0.24F);
-        rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, 0.28F, lift, -0.12F);
-        rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, 0.04F, lift, -0.28F);
+
+        // Jagged main fissure and irregular branches across the top face.
+        rdbt$crackSegment(lines, matrix, -0.46F * spread, lift, -0.34F * spread, -0.29F * spread, lift, -0.17F * spread);
+        rdbt$crackSegment(lines, matrix, -0.29F * spread, lift, -0.17F * spread, -0.13F * spread, lift, -0.025F * spread);
+        rdbt$crackSegment(lines, matrix, -0.13F * spread, lift, -0.025F * spread, 0.035F * spread, lift, 0.105F * spread);
+        rdbt$crackSegment(lines, matrix, 0.035F * spread, lift, 0.105F * spread, 0.19F * spread, lift, 0.23F * spread);
+        rdbt$crackSegment(lines, matrix, 0.19F * spread, lift, 0.23F * spread, 0.45F * spread, lift, 0.39F * spread);
+
+        // Branches make the fracture read as a crack network rather than parallel stripes.
+        rdbt$crackSegment(lines, matrix, -0.29F * spread, lift, -0.17F * spread, -0.43F * spread, lift, -0.015F * spread);
+        rdbt$crackSegment(lines, matrix, -0.43F * spread, lift, -0.015F * spread, -0.48F * spread, lift, 0.16F * spread);
+        rdbt$crackSegment(lines, matrix, -0.13F * spread, lift, -0.025F * spread, -0.31F * spread, lift, 0.15F * spread);
+        rdbt$crackSegment(lines, matrix, -0.31F * spread, lift, 0.15F * spread, -0.34F * spread, lift, 0.36F * spread);
+        rdbt$crackSegment(lines, matrix, 0.035F * spread, lift, 0.105F * spread, -0.015F * spread, lift, 0.30F * spread);
+        rdbt$crackSegment(lines, matrix, -0.015F * spread, lift, 0.30F * spread, 0.08F * spread, lift, 0.46F * spread);
+        rdbt$crackSegment(lines, matrix, 0.19F * spread, lift, 0.23F * spread, 0.34F * spread, lift, 0.075F * spread);
+        rdbt$crackSegment(lines, matrix, 0.34F * spread, lift, 0.075F * spread, 0.48F * spread, lift, 0.005F * spread);
+        rdbt$crackSegment(lines, matrix, 0.19F * spread, lift, 0.23F * spread, 0.30F * spread, lift, 0.42F * spread);
+
+        // Continue fractures over two side faces so blocks do not look striped only on top.
+        rdbt$crackSegment(lines, matrix, -0.40F * spread, -0.34F * spread, 0.503F, -0.20F * spread, -0.18F * spread, 0.503F);
+        rdbt$crackSegment(lines, matrix, -0.20F * spread, -0.18F * spread, 0.503F, 0.02F * spread, 0.00F * spread, 0.503F);
+        rdbt$crackSegment(lines, matrix, 0.02F * spread, 0.00F * spread, 0.503F, 0.23F * spread, 0.22F * spread, 0.503F);
+        rdbt$crackSegment(lines, matrix, 0.02F * spread, 0.00F * spread, 0.503F, -0.16F * spread, 0.23F * spread, 0.503F);
+        rdbt$crackSegment(lines, matrix, 0.23F * spread, 0.22F * spread, 0.503F, 0.42F * spread, 0.36F * spread, 0.503F);
+
+        rdbt$crackSegment(lines, matrix, 0.503F, -0.36F * spread, -0.34F * spread, 0.503F, -0.18F * spread, -0.16F * spread);
+        rdbt$crackSegment(lines, matrix, 0.503F, -0.18F * spread, -0.16F * spread, 0.503F, 0.02F * spread, 0.035F * spread);
+        rdbt$crackSegment(lines, matrix, 0.503F, 0.02F * spread, 0.035F * spread, 0.503F, 0.24F * spread, 0.28F * spread);
+        rdbt$crackSegment(lines, matrix, 0.503F, 0.02F * spread, 0.035F * spread, 0.503F, 0.27F * spread, -0.13F * spread);
     }
+
 
     @Unique
     private void rdbt$crackSegment(VertexConsumer lines, Matrix4f matrix,

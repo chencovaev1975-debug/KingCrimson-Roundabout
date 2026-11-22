@@ -28,11 +28,6 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
         if (player == null) {
             return;
         }
-        if (ConfigManager.getClientConfig() != null
-                && ConfigManager.getClientConfig().generalSettings != null
-                && !ConfigManager.getClientConfig().generalSettings.timeEraseBlocks) {
-            return;
-        }
         if (((TimeStop) player.level()).inTimeStopRange(player)) {
             return;
         }
@@ -41,43 +36,35 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
         Vec3 eye = player.getEyePosition();
         RandomSource random = level.random;
 
-        // Sweep every direction around the player, limited to a 12-block radius.
-        // Every ray selects the first solid surface it touches, never blocks behind a wall.
-        final double radius = 12.0D;
-        final double[] pitchAngles = {-0.62D, -0.40D, -0.20D, 0.0D, 0.20D, 0.40D, 0.62D};
+        // Collect exposed solid blocks in a compact sphere around the player.
+        // This does not depend on the optional Roundabout terrain-fragment setting.
+        final int radius = 7;
+        final int minY = Mth.floor(player.getY()) - 3;
+        final int maxY = Mth.floor(player.getY()) + 5;
         Set<BlockPos> surroundingBlocks = new LinkedHashSet<>();
-
-        for (int yawIndex = 0; yawIndex < 72; yawIndex++) {
-            double yaw = (Math.PI * 2.0D * yawIndex) / 72.0D;
-            for (double pitch : pitchAngles) {
-                double horizontal = Math.cos(pitch);
-                Vec3 direction = new Vec3(
-                        -Math.sin(yaw) * horizontal,
-                        Math.sin(pitch),
-                        Math.cos(yaw) * horizontal
-                );
-                Vec3 end = eye.add(direction.scale(radius));
-                net.minecraft.world.phys.BlockHitResult hit = level.clip(
-                        new net.minecraft.world.level.ClipContext(
-                                eye,
-                                end,
-                                net.minecraft.world.level.ClipContext.Block.COLLIDER,
-                                net.minecraft.world.level.ClipContext.Fluid.NONE,
-                                player
-                        )
-                );
-
-                if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
-                    continue;
-                }
-
-                BlockPos pos = hit.getBlockPos().immutable();
-                BlockState state = level.getBlockState(pos);
-                if (!state.isAir()
-                        && state.getRenderShape() == RenderShape.MODEL
-                        && state.getFluidState().isEmpty()
-                        && state.isSolidRender(level, pos)) {
-                    surroundingBlocks.add(pos);
+        BlockPos center = player.blockPosition();
+        outer:
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if (dx * dx + dz * dz > radius * radius) continue;
+                for (int y = minY; y <= maxY; y++) {
+                    BlockPos pos = new BlockPos(center.getX() + dx, y, center.getZ() + dz);
+                    BlockState state = level.getBlockState(pos);
+                    if (state.isAir() || state.getRenderShape() != RenderShape.MODEL
+                            || !state.getFluidState().isEmpty() || !state.isSolidRender(level, pos)) {
+                        continue;
+                    }
+                    boolean exposed = false;
+                    for (Direction direction : Direction.values()) {
+                        if (level.getBlockState(pos.relative(direction)).isAir()) {
+                            exposed = true;
+                            break;
+                        }
+                    }
+                    if (exposed) {
+                        surroundingBlocks.add(pos.immutable());
+                        if (surroundingBlocks.size() >= 180) break outer;
+                    }
                 }
             }
         }
@@ -176,6 +163,19 @@ replace_once(
 )
 
 # Keep each original block visible while its surface cracks; only then lift its shards.
+replace_once(
+    effect,
+    """    public static void updateTerrainFragments() {
+        if (ConfigManager.getClientConfig() != null && ConfigManager.getClientConfig().generalSettings != null &&
+                !ConfigManager.getClientConfig().generalSettings.timeEraseBlocks){
+            return;
+        }
+""",
+    """    public static void updateTerrainFragments() {
+""",
+    "always update the custom Time Erase fragments"
+)
+
 replace_once(
     effect,
     """            frag.velocity = frag.velocity.add(0, 0.005, 0);
@@ -322,9 +322,83 @@ new_renderer = """    @Unique
         lines.vertex(matrix, bx, by, bz).color(0.03F, 0.01F, 0.01F, 1.0F).endVertex();
     }
 
+    private void rdbt$renderKingCrimsonAura(PoseStack poseStack, MultiBufferSource buffer,
+                                                Camera camera, float partialTick) {
+        Player player = Minecraft.getInstance().player;
+        if (player == null || !(((StandUser) player).roundabout$getStand() instanceof KingCrimsonEntity stand)
+                || !stand.isAlive() || stand.isRemoved()) {
+            return;
+        }
+
+        Vec3 cam = camera.getPosition();
+        double x = Mth.lerp(partialTick, player.xOld, player.getX()) - cam.x;
+        double y = Mth.lerp(partialTick, player.yOld, player.getY()) - cam.y;
+        double z = Mth.lerp(partialTick, player.zOld, player.getZ()) - cam.z;
+        float pulse = 0.92F + Mth.sin((ClientUtil.clientTicker + partialTick) * 0.22F) * 0.08F;
+        VertexConsumer lines = buffer.getBuffer(RenderType.lines());
+        poseStack.pushPose();
+        poseStack.translate(x, y, z);
+        Matrix4f matrix = poseStack.last().pose();
+
+        // Three pulsing red rings and rising energy filaments form a full-body aura.
+        float[] heights = {0.10F, 0.78F, 1.55F, 1.82F};
+        for (int ring = 0; ring < heights.length; ring++) {
+            float radius = (ring == 0 ? 0.52F : ring == 1 ? 0.43F : 0.34F) * pulse;
+            rdbt$renderAuraRing(lines, matrix, heights[ring], radius, ring * 0.22F);
+        }
+        for (int i = 0; i < 12; i++) {
+            float angle = (float) (Math.PI * 2.0D * i / 12.0D)
+                    + (ClientUtil.clientTicker + partialTick) * 0.035F;
+            float radius = 0.43F * pulse;
+            float x1 = Mth.cos(angle) * radius;
+            float z1 = Mth.sin(angle) * radius;
+            float x2 = Mth.cos(angle + 0.16F) * (radius * 0.72F);
+            float z2 = Mth.sin(angle + 0.16F) * (radius * 0.72F);
+            lines.vertex(matrix, x1, 0.12F, z1).color(1.0F, 0.015F, 0.025F, 0.88F).endVertex();
+            lines.vertex(matrix, x2, 1.78F, z2).color(0.75F, 0.0F, 0.015F, 0.12F).endVertex();
+        }
+        poseStack.popPose();
+    }
+
+    @Unique
+    private void rdbt$renderAuraRing(VertexConsumer lines, Matrix4f matrix,
+                                    float y, float radius, float phase) {
+        final int segments = 40;
+        for (int i = 0; i < segments; i++) {
+            float a0 = (float) (Math.PI * 2.0D * i / segments) + phase;
+            float a1 = (float) (Math.PI * 2.0D * (i + 1) / segments) + phase;
+            lines.vertex(matrix, Mth.cos(a0) * radius, y, Mth.sin(a0) * radius)
+                    .color(1.0F, 0.015F, 0.025F, 0.78F).endVertex();
+            lines.vertex(matrix, Mth.cos(a1) * radius, y, Mth.sin(a1) * radius)
+                    .color(0.82F, 0.0F, 0.01F, 0.25F).endVertex();
+        }
+    }
+
 """
 s = s[:start] + new_renderer + s[end:]
 renderer.write_text(s, encoding="utf-8")
+
+replace_once(
+    renderer,
+    """        rdbt$renderTerrainFragments(
+                $0,
+                buffer,
+                $3,
+                $2
+        );
+
+        buffer.endBatch();""",
+    """        rdbt$renderTerrainFragments(
+                $0,
+                buffer,
+                $3,
+                $2
+        );
+        rdbt$renderKingCrimsonAura($0, buffer, $3, $2);
+        buffer.endBatch();
+        RenderSystem.lineWidth(1.0F);""",
+    "render the King Crimson aura"
+)
 
 # Hide the terrain only while the ability itself is active, not during its fade-out.
 replace_once(

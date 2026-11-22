@@ -175,9 +175,6 @@ replace_once(
                     ClientEffectUtil.spawnKingCrimsonAura(player);
                 }
                 if (PKC.isUsingTimeErase()){
-                    if (!isUsingTimeErase) {
-                        ClientEffectUtil.spawnTimeEraseShards(player);
-                    }
                     isUsingTimeErase = true;""",
     "one-shot 360-degree Time Erase shard trigger"
 )
@@ -562,11 +559,11 @@ replace_once(
         );
 
         buffer.endBatch();""",
-    """        rdbt$renderTerrainFragments(
-                $$0,
+    """        rdbt$renderKingCrimsonAura(
+                $0,
                 buffer,
-                $$3,
-                $$2
+                $3,
+                $2
         );
         buffer.endBatch();
         RenderSystem.lineWidth(1.0F);""",
@@ -590,4 +587,4 @@ replace_once(
     "immediate terrain restoration at Time Erase end"
 )
 
-print("Applied: 360-degree nearby block cracks, four large textured debris chunks per block, slow upward motion, gradual shrink-out, and immediate terrain restoration.")
+print("Applied: clean Time Erase terrain vanish with no cracks or debris, plus a rendered red King Crimson aura.")

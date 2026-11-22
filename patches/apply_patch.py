@@ -126,12 +126,9 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
                 );
             }
             outward = outward.normalize();
-            fragment.velocity = outward.scale(0.045D + random.nextDouble() * 0.035D)
-                    .add(
-                            random.nextGaussian() * 0.012D,
-                            random.nextGaussian() * 0.012D,
-                            random.nextGaussian() * 0.012D
-                    );
+            // Hold the intact block in place during the crack phase.
+            // Slow upward drift begins only after the crack animation.
+            fragment.velocity = Vec3.ZERO;
 
             fragment.rotX = random.nextFloat() * 360.0F;
             fragment.rotY = random.nextFloat() * 360.0F;
@@ -145,7 +142,7 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
             fragment.prevScale = 1.0F;
             fragment.scale = 1.0F;
             fragment.age = 0;
-            fragment.maxAge = 28 + random.nextInt(10);
+            fragment.maxAge = 96 + random.nextInt(18);
             terrainFragments.add(fragment);
         }
     }
@@ -174,8 +171,44 @@ replace_once(
 replace_once(
     fragments,
     "    public BlockState state;\n",
-    "    public BlockState state;\n    public boolean triangularShard;\n    public Vec3 shardA;\n    public Vec3 shardB;\n    public Vec3 shardC;\n    public Vec3 shardD;\n",
+    "    public BlockState state;\n    public boolean triangularShard;\n    public Vec3 shardA;\n    public Vec3 shardB;\n    public Vec3 shardC;\n    public Vec3 shardD;\n    public int crackTicks;\n",
     "TerrainFragments triangular shard geometry"
+)
+
+# Keep each original block visible while its surface cracks; only then lift its shards.
+replace_once(
+    effect,
+    """            frag.velocity = frag.velocity.add(0, 0.005, 0);
+
+            frag.pos = frag.pos.add(frag.velocity);""",
+    """            if (frag.age >= 16) {
+                // Slow, cinematic lift: ease upward instead of launching immediately.
+                double lift = Math.min(0.010D, 0.0015D + (frag.age - 16) * 0.00012D);
+                frag.velocity = frag.velocity.add(0, lift, 0);
+                frag.velocity = new Vec3(
+                        frag.velocity.x * 0.985D,
+                        Math.min(frag.velocity.y, 0.035D),
+                        frag.velocity.z * 0.985D
+                );
+                frag.pos = frag.pos.add(frag.velocity);
+            }""",
+    "crack pause and slow shard lift"
+)
+
+replace_once(
+    effect,
+    """            if (ClientUtil.isUsingTimeErase && frag.age < frag.maxAge) {
+                frag.scale = 1.0F;
+            } else {
+                frag.scale = Math.max(0.0F, frag.scale - 0.05F);
+            }""",
+    """            if (ClientUtil.isUsingTimeErase && frag.age < frag.maxAge - 20) {
+                frag.scale = 1.0F;
+            } else {
+                // Gradual evaporation rather than an abrupt disappearance.
+                frag.scale = Math.max(0.0F, frag.scale - 0.035F);
+            }""",
+    "gradual shard evaporation"
 )
 
 # Replace the block-cube renderer with textured tetrahedral shard rendering.
@@ -225,7 +258,19 @@ new_renderer = """    @Unique
             poseStack.mulPose(Axis.YP.rotationDegrees(ry));
             poseStack.mulPose(Axis.ZP.rotationDegrees(rz));
 
-            if (frag.triangularShard) {
+            if (frag.triangularShard && frag.age < 16) {
+                // Crack stage: keep the source block in place before it breaks apart.
+                poseStack.translate(-0.5, -0.5, -0.5);
+                dispatcher.renderSingleBlock(
+                        frag.state,
+                        poseStack,
+                        buffer,
+                        LightTexture.FULL_BRIGHT,
+                        OverlayTexture.NO_OVERLAY
+                );
+                poseStack.translate(0.5, 0.5, 0.5);
+                rdbt$renderCrackLines(poseStack, buffer, frag.age);
+            } else if (frag.triangularShard) {
                 poseStack.scale(scale, scale, scale);
                 net.minecraft.client.renderer.texture.TextureAtlasSprite sprite =
                         dispatcher.getBlockModelShaper().getParticleIcon(frag.state);
@@ -253,6 +298,28 @@ new_renderer = """    @Unique
 
             poseStack.popPose();
         }
+    }
+
+    @Unique
+    private void rdbt$renderCrackLines(PoseStack poseStack, MultiBufferSource buffer, int age) {
+        VertexConsumer lines = buffer.getBuffer(RenderType.lines());
+        Matrix4f matrix = poseStack.last().pose();
+        float spread = Math.min(0.46F, 0.12F + age * 0.022F);
+        float lift = 0.503F;
+        // Three branching jagged fissures across the top face.
+        rdbt$crackSegment(lines, matrix, -spread, lift, -0.08F, -0.05F, lift, 0.02F);
+        rdbt$crackSegment(lines, matrix, -0.05F, lift, 0.02F, 0.12F, lift, 0.13F);
+        rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, spread, lift, 0.30F);
+        rdbt$crackSegment(lines, matrix, -0.05F, lift, 0.02F, -0.20F, lift, 0.24F);
+        rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, 0.28F, lift, -0.12F);
+    }
+
+    @Unique
+    private void rdbt$crackSegment(VertexConsumer lines, Matrix4f matrix,
+                                   float ax, float ay, float az,
+                                   float bx, float by, float bz) {
+        lines.vertex(matrix, ax, ay, az).color(0.08F, 0.02F, 0.02F, 1.0F).endVertex();
+        lines.vertex(matrix, bx, by, bz).color(0.08F, 0.02F, 0.02F, 1.0F).endVertex();
     }
 
     @Unique

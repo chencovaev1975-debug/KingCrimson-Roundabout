@@ -69,8 +69,8 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
             }
         }
 
-        // One tetrahedral shard per surrounding surface block. Each shard has four
-        // triangular faces, so the effect is angular debris instead of tiny cubes.
+        // Each exposed block becomes one fragment group. The renderer splits
+        // the group into four large textured chunks after the crack phase.
         terrainFragments.clear();
         for (BlockPos pos : surroundingBlocks) {
             BlockState state = level.getBlockState(pos);
@@ -78,31 +78,8 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
 
             TerrainFragments fragment = new TerrainFragments();
             fragment.state = state;
-            fragment.triangularShard = true;
             fragment.pos = blockCenter;
             fragment.prevPos = blockCenter;
-
-            // Select a random corner and form a sharp tetrahedron inside the source block.
-            double sx = random.nextBoolean() ? -0.43D : 0.43D;
-            double sy = random.nextBoolean() ? -0.43D : 0.43D;
-            double sz = random.nextBoolean() ? -0.43D : 0.43D;
-            double shardSize = 0.30D + random.nextDouble() * 0.12D;
-            fragment.shardA = new Vec3(sx, sy, sz);
-            fragment.shardB = fragment.shardA.add(
-                    -Math.signum(sx) * shardSize,
-                    random.nextGaussian() * 0.025D,
-                    random.nextGaussian() * 0.025D
-            );
-            fragment.shardC = fragment.shardA.add(
-                    random.nextGaussian() * 0.025D,
-                    -Math.signum(sy) * shardSize,
-                    random.nextGaussian() * 0.025D
-            );
-            fragment.shardD = fragment.shardA.add(
-                    random.nextGaussian() * 0.025D,
-                    random.nextGaussian() * 0.025D,
-                    -Math.signum(sz) * shardSize
-            );
 
             Vec3 outward = blockCenter.subtract(player.position());
             if (outward.lengthSqr() < 1.0E-5D) {
@@ -152,14 +129,6 @@ replace_once(
                     }
                     isUsingTimeErase = true;""",
     "one-shot 360-degree Time Erase shard trigger"
-)
-
-# Store a tetrahedron's four local vertices in each fragment.
-replace_once(
-    fragments,
-    "    public BlockState state;\n",
-    "    public BlockState state;\n    public boolean triangularShard;\n    public Vec3 shardA;\n    public Vec3 shardB;\n    public Vec3 shardC;\n    public Vec3 shardD;\n    public int crackTicks;\n",
-    "TerrainFragments triangular shard geometry"
 )
 
 # Keep each original block visible while its surface cracks; only then lift its shards.
@@ -250,9 +219,11 @@ new_renderer = """    @Unique
             float rx = Mth.lerp(partialTick, frag.prevRotX, frag.rotX);
             float ry = Mth.lerp(partialTick, frag.prevRotY, frag.rotY);
             float rz = Mth.lerp(partialTick, frag.prevRotZ, frag.rotZ);
+            float interpolatedScale = Mth.lerp(partialTick, frag.prevScale, frag.scale);
 
             poseStack.pushPose();
             poseStack.translate(x, y, z);
+            poseStack.scale(interpolatedScale, interpolatedScale, interpolatedScale);
 
             if (frag.age < 16) {
                 // Stage 1: the original block stays intact while visible fissures spread.
@@ -265,34 +236,35 @@ new_renderer = """    @Unique
                 poseStack.popPose();
                 rdbt$renderCrackLines(poseStack, buffer, frag.age);
             } else {
-                // Stage 2: split the block into eight clearly visible textured chunks.
-                // Each chunk separates and rises slowly; the source world block is untouched.
+                // Stage 2: four large textured chunks separate from the source block.
+                // Their size and spacing are intentionally substantial, not tiny chips.
                 float elapsed = frag.age - 16;
-                float spread = Math.min(0.20F, elapsed * 0.006F);
-                float rise = Math.min(0.18F, elapsed * 0.005F);
-                for (int ix = 0; ix < 2; ix++) {
-                    for (int iy = 0; iy < 2; iy++) {
-                        for (int iz = 0; iz < 2; iz++) {
-                            poseStack.pushPose();
-                            float sx = ix == 0 ? -1.0F : 1.0F;
-                            float sy = iy == 0 ? -1.0F : 1.0F;
-                            float sz = iz == 0 ? -1.0F : 1.0F;
-                            poseStack.translate(
-                                    -0.5F + ix * 0.5F + sx * spread,
-                                    -0.5F + iy * 0.5F + rise + Math.max(0.0F, sy) * spread,
-                                    -0.5F + iz * 0.5F + sz * spread
-                            );
-                            poseStack.mulPose(Axis.XP.rotationDegrees(rx * 0.18F + sx * elapsed * 0.8F));
-                            poseStack.mulPose(Axis.YP.rotationDegrees(ry * 0.18F + sy * elapsed * 0.9F));
-                            poseStack.mulPose(Axis.ZP.rotationDegrees(rz * 0.18F + sz * elapsed * 0.7F));
-                            poseStack.scale(0.5F, 0.5F, 0.5F);
-                            dispatcher.renderSingleBlock(
-                                    frag.state, poseStack, buffer,
-                                    LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
-                            );
-                            poseStack.popPose();
-                        }
-                    }
+                float spread = Math.min(0.36F, elapsed * 0.007F);
+                float rise = Math.min(0.22F, elapsed * 0.0045F);
+
+                for (int piece = 0; piece < 4; piece++) {
+                    float angle = (float) (Math.PI * 0.5D * piece) + frag.rotZ * 0.006F;
+                    float dx = Mth.cos(angle) * (0.13F + spread);
+                    float dz = Mth.sin(angle) * (0.13F + spread);
+                    float dy = (piece % 2 == 0 ? 0.00F : 0.09F) + rise;
+
+                    float sx = piece == 0 ? 0.76F : piece == 1 ? 0.70F : piece == 2 ? 0.73F : 0.68F;
+                    float sy = piece == 0 ? 0.66F : piece == 1 ? 0.74F : piece == 2 ? 0.69F : 0.77F;
+                    float sz = piece == 0 ? 0.71F : piece == 1 ? 0.75F : piece == 2 ? 0.67F : 0.73F;
+
+                    poseStack.pushPose();
+                    poseStack.translate(dx - 0.5F, dy - 0.5F, dz - 0.5F);
+                    poseStack.translate(0.5F, 0.5F, 0.5F);
+                    poseStack.mulPose(Axis.XP.rotationDegrees(rx * 0.22F + piece * 23.0F + elapsed * 0.55F));
+                    poseStack.mulPose(Axis.YP.rotationDegrees(ry * 0.22F + piece * 37.0F - elapsed * 0.70F));
+                    poseStack.mulPose(Axis.ZP.rotationDegrees(rz * 0.22F + piece * 17.0F + elapsed * 0.45F));
+                    poseStack.scale(sx, sy, sz);
+                    poseStack.translate(-0.5F, -0.5F, -0.5F);
+                    dispatcher.renderSingleBlock(
+                            frag.state, poseStack, buffer,
+                            LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
+                    );
+                    poseStack.popPose();
                 }
             }
             poseStack.popPose();
@@ -417,4 +389,4 @@ replace_once(
     "immediate terrain restoration at Time Erase end"
 )
 
-print("Applied: 360-degree nearby block shatter into textured triangular shards; terrain restores immediately after Time Erase.")
+print("Applied: 360-degree nearby block cracks, four large textured debris chunks per block, slow upward motion, gradual shrink-out, and immediate terrain restoration.")

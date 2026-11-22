@@ -28,85 +28,69 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
         if (player == null || ((TimeStop) player.level()).inTimeStopRange(player)) {
             return;
         }
-
         Level level = player.level();
-        RandomSource random = level.random;
-        final int radius = 7;
-        final int minY = Mth.floor(player.getY()) - 3;
-        final int maxY = Mth.floor(player.getY()) + 5;
+        Vec3 eye = player.getEyePosition();
+        Vec3 look = player.getLookAngle().normalize();
+        final int radius = 40;
+        final int verticalRadius = 24;
+        final double minimumViewDot = 0.34D;
         BlockPos center = player.blockPosition();
-        List<BlockPos> surroundingBlocks = new ArrayList<>();
+        List<BlockPos> visibleBlocks = new ArrayList<>();
 
-        // Gather exposed, full block models around the player.
+        // Scan a wide cone in the direction the player is actually looking.
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                if (dx * dx + dz * dz > radius * radius) {
-                    continue;
-                }
-                for (int y = minY; y <= maxY; y++) {
+                for (int y = center.getY() - verticalRadius; y <= center.getY() + verticalRadius; y++) {
                     BlockPos pos = new BlockPos(center.getX() + dx, y, center.getZ() + dz);
+                    Vec3 toBlock = Vec3.atCenterOf(pos).subtract(eye);
+                    double distanceSqr = toBlock.lengthSqr();
+                    if (distanceSqr < 0.04D || distanceSqr > (double) radius * radius) continue;
+                    if (toBlock.dot(look) / Math.sqrt(distanceSqr) < minimumViewDot) continue;
+
                     BlockState state = level.getBlockState(pos);
                     if (state.isAir() || state.getRenderShape() != RenderShape.MODEL
-                            || !state.getFluidState().isEmpty() || !state.isSolidRender(level, pos)) {
-                        continue;
-                    }
+                            || !state.getFluidState().isEmpty() || !state.isSolidRender(level, pos)) continue;
 
                     boolean exposed = false;
                     for (Direction direction : Direction.values()) {
-                        if (level.getBlockState(pos.relative(direction)).isAir()) {
+                        BlockPos neighborPos = pos.relative(direction);
+                        BlockState neighbor = level.getBlockState(neighborPos);
+                        if (neighbor.isAir() || !neighbor.isSolidRender(level, neighborPos)) {
                             exposed = true;
                             break;
                         }
                     }
-                    if (exposed) {
-                        surroundingBlocks.add(pos.immutable());
-                    }
+                    if (exposed) visibleBlocks.add(pos.immutable());
                 }
             }
         }
 
-        // Keep the nearest 180 blocks so the effect stays bounded and evenly centered.
-        surroundingBlocks.sort(Comparator.comparingDouble(pos -> pos.distSqr(center)));
-        if (surroundingBlocks.size() > 180) {
-            surroundingBlocks = new ArrayList<>(surroundingBlocks.subList(0, 180));
+        visibleBlocks.sort(Comparator.comparingDouble(pos -> Vec3.atCenterOf(pos).distanceToSqr(eye)));
+        if (visibleBlocks.size() > 2200) {
+            visibleBlocks = new ArrayList<>(visibleBlocks.subList(0, 2200));
         }
 
         terrainFragments.clear();
-        for (BlockPos pos : surroundingBlocks) {
-            BlockState state = level.getBlockState(pos);
+        for (BlockPos pos : visibleBlocks) {
             Vec3 blockCenter = Vec3.atCenterOf(pos);
+            Vec3 outward = blockCenter.subtract(player.position());
+            if (outward.lengthSqr() < 1.0E-5D) outward = look;
+            outward = outward.normalize();
 
             TerrainFragments fragment = new TerrainFragments();
-            fragment.state = state;
+            fragment.state = level.getBlockState(pos);
             fragment.pos = blockCenter;
             fragment.prevPos = blockCenter;
-
-            Vec3 outward = blockCenter.subtract(player.position());
-            if (outward.lengthSqr() < 1.0E-5D) {
-                outward = new Vec3(
-                        random.nextGaussian(),
-                        random.nextGaussian() * 0.5D,
-                        random.nextGaussian()
-                );
-            }
-            outward = outward.normalize();
-            fragment.velocity = outward.scale(0.018D).add(0.0D, 0.010D, 0.0D);
-
-            // Stagger the fracture start into a radial wave from the player.
-            int delay = (int) Math.round(Math.sqrt(pos.distSqr(center)) * 0.5D);
+            fragment.velocity = outward.scale(0.025D).add(0.0D, 0.012D, 0.0D);
+            fragment.fractureSeed = pos.hashCode();
+            int delay = (int) Math.round(Math.sqrt(blockCenter.distanceToSqr(eye)) * 0.5D);
             fragment.age = -delay;
             fragment.maxAge = 24;
             fragment.scale = 1.0F;
             fragment.prevScale = 1.0F;
-            fragment.rotX = 0.0F;
-            fragment.rotY = 0.0F;
-            fragment.rotZ = 0.0F;
-            fragment.prevRotX = 0.0F;
-            fragment.prevRotY = 0.0F;
-            fragment.prevRotZ = 0.0F;
-            fragment.rotSpeedX = 0.0F;
-            fragment.rotSpeedY = 0.0F;
-            fragment.rotSpeedZ = 0.0F;
+            fragment.rotX = fragment.rotY = fragment.rotZ = 0.0F;
+            fragment.prevRotX = fragment.prevRotY = fragment.prevRotZ = 0.0F;
+            fragment.rotSpeedX = fragment.rotSpeedY = fragment.rotSpeedZ = 0.0F;
             terrainFragments.add(fragment);
         }
     }
@@ -114,6 +98,13 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
 """
 source = source[:start] + new_effect_method + source[end:]
 effect.write_text(source, encoding="utf-8")
+
+replace_once(
+    fragments,
+    """    public int maxAge;""",
+    """    public int maxAge;\n    public int fractureSeed;""",
+    "deterministic per-block fracture seed"
+)
 
 replace_once(
     effect,
@@ -133,28 +124,37 @@ replace_once(
     effect,
     """    public static void renderPurpleBox(""",
     """    public static void spawnKingCrimsonAura(LocalPlayer player) {
-        if (player == null) {
+        if (player == null
+                || !(((net.hydra.jojomod.event.powers.StandUser) player).roundabout$getStand()
+                instanceof net.hydra.jojomod.entity.stand.KingCrimsonEntity stand)
+                || !stand.isAlive() || stand.isRemoved()) {
             return;
         }
 
-        Level level = player.level();
+        Level level = stand.level();
         RandomSource random = level.random;
-        DustParticleOptions aura = new DustParticleOptions(
-                new Vector3f(0.82F, 0.012F, 0.028F),
-                1.25F
+        DustParticleOptions crimson = new DustParticleOptions(
+                new Vector3f(0.95F, 0.012F, 0.045F), 1.35F
+        );
+        DustParticleOptions violet = new DustParticleOptions(
+                new Vector3f(0.34F, 0.015F, 0.82F), 1.05F
         );
 
-        // A loose, continuously replenished particle volume around the player's body.
-        for (int i = 0; i < 10; i++) {
-            double angle = random.nextDouble() * Math.PI * 2.0D;
-            double radius = 0.36D + random.nextDouble() * 0.24D;
-            double x = player.getX() + Math.cos(angle) * radius;
-            double y = player.getY() + 0.08D + random.nextDouble() * Math.max(0.8D, player.getBbHeight());
-            double z = player.getZ() + Math.sin(angle) * radius;
-            double vx = (random.nextDouble() - 0.5D) * 0.008D;
-            double vy = 0.006D + random.nextDouble() * 0.012D;
-            double vz = (random.nextDouble() - 0.5D) * 0.008D;
-            level.addParticle(aura, x, y, z, vx, vy, vz);
+        // A swirling particle cloud around the stand; no line segments or rods.
+        double height = Math.max(1.0D, stand.getBbHeight());
+        double radiusBase = Math.max(0.48D, stand.getBbWidth() * 0.62D);
+        double phase = stand.tickCount * 0.16D;
+        for (int i = 0; i < 18; i++) {
+            double angle = phase + Math.PI * 2.0D * i / 18.0D;
+            double radius = radiusBase + random.nextDouble() * 0.16D;
+            double yFraction = ((i % 6) + random.nextDouble() * 0.8D) / 6.0D;
+            double x = stand.getX() + Math.cos(angle) * radius;
+            double y = stand.getY() + 0.08D + yFraction * height;
+            double z = stand.getZ() + Math.sin(angle) * radius;
+            double vx = -Math.sin(angle) * 0.014D + (random.nextDouble() - 0.5D) * 0.006D;
+            double vy = 0.004D + random.nextDouble() * 0.010D;
+            double vz = Math.cos(angle) * 0.014D + (random.nextDouble() - 0.5D) * 0.006D;
+            level.addParticle((i % 4 == 0) ? violet : crimson, x, y, z, vx, vy, vz);
         }
     }
 
@@ -170,13 +170,12 @@ replace_once(
                         ClientEffectUtil.spawnTerrainFragment(player);
                     }
                     isUsingTimeErase = true;""",
-    """                if (PKC.isUsingTimeErase()){
+    """                if (clientTicker % 2 == 0) {
+                    ClientEffectUtil.spawnKingCrimsonAura(player);
+                }
+                if (PKC.isUsingTimeErase()){
                     if (!isUsingTimeErase) {
                         ClientEffectUtil.spawnTimeEraseShards(player);
-                    }
-                    if (clientTicker % 2 == 0 && ((StandUser) player).roundabout$getStand() != null
-                            && ((StandUser) player).roundabout$getStand().isAlive()) {
-                        ClientEffectUtil.spawnKingCrimsonAura(player);
                     }
                     isUsingTimeErase = true;""",
     "one-shot block fracture wave and preserved King Crimson particle aura"

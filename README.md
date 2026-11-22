@@ -5,7 +5,7 @@ A personal Fabric 1.20.1 build recipe for Roundabout. It keeps the real Roundabo
 ## What this build changes
 - Keeps Roundabout's actual King Crimson / Time Erase activation and deactivation.
 - Reuses Roundabout's own Time Erase skybox and its original `time_erase_full` / `time_erase_end` sound events. No duplicate keybind or parallel ability is added.
-- Changes the existing floating full-block terrain fragments into clusters of 27 small block-textured cubic chips.
+- Replaces the random distant full-block debris with nearby staged cracks and four large, rotating, block-textured debris chunks per affected block. The chunks rise slowly and shrink away instead of remaining as tiny chips.
 - Leaves the world untouched: the fragments are client-side render effects only.
 - Retains Roundabout's own red entity projections and existing sky fade.
 

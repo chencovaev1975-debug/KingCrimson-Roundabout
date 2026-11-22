@@ -91,12 +91,12 @@ visible_only_method = """    public static void spawnVisibleTerrainFragments(Loc
         // while Time Erase is active.
         terrainFragments.clear();
         RandomSource random = level.random;
-        int blocksSpawned = 0;
-        for (BlockPos pos : visibleBlocks) {
-            if (blocksSpawned >= 18) {
-                break;
-            }
-
+        List<BlockPos> visibleBlockList = new ArrayList<>(visibleBlocks);
+        int blocksToSpawn = Math.min(18, visibleBlockList.size());
+        for (int blockIndex = 0; blockIndex < blocksToSpawn; blockIndex++) {
+            // Spread the cap evenly across the complete camera view, not just its lower-left area.
+            int selectedIndex = blockIndex * visibleBlockList.size() / blocksToSpawn;
+            BlockPos pos = visibleBlockList.get(selectedIndex);
             BlockState state = level.getBlockState(pos);
             Vec3 blockCenter = Vec3.atCenterOf(pos);
 
@@ -136,7 +136,6 @@ visible_only_method = """    public static void spawnVisibleTerrainFragments(Loc
                     }
                 }
             }
-            blocksSpawned++;
         }
     }
 

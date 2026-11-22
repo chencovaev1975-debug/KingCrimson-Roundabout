@@ -560,10 +560,10 @@ replace_once(
 
         buffer.endBatch();""",
     """        rdbt$renderKingCrimsonAura(
-                $0,
+                $$0,
                 buffer,
-                $3,
-                $2
+                $$3,
+                $$2
         );
         buffer.endBatch();
         RenderSystem.lineWidth(1.0F);""",

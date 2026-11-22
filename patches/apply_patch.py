@@ -15,8 +15,7 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
 
-# Replace Roundabout's random 30-block-radius, upward-flying block selection with
-# one-time sampling of the block surfaces actually visible in the player's view.
+# Replace Roundabout's random upward-flying blocks with a 360-degree radius sweep.
 source = effect.read_text(encoding="utf-8")
 start_marker = "    public static void spawnTerrainFragment(LocalPlayer player) {"
 end_marker = "    public static void renderPurpleBox("
@@ -25,7 +24,7 @@ end = source.find(end_marker, start + len(start_marker))
 if start < 0 or end < 0:
     raise SystemExit("Could not locate the original spawnTerrainFragment method.")
 
-visible_only_method = """    public static void spawnVisibleTerrainFragments(LocalPlayer player) {
+new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer player) {
         if (player == null) {
             return;
         }
@@ -40,29 +39,24 @@ visible_only_method = """    public static void spawnVisibleTerrainFragments(Loc
 
         Level level = player.level();
         Vec3 eye = player.getEyePosition();
-        Vec3 look = player.getViewVector(1.0F).normalize();
-        Vec3 right = look.cross(new Vec3(0.0D, 1.0D, 0.0D));
-        if (right.lengthSqr() < 1.0E-6D) {
-            right = new Vec3(1.0D, 0.0D, 0.0D);
-        } else {
-            right = right.normalize();
-        }
-        Vec3 up = right.cross(look).normalize();
+        RandomSource random = level.random;
 
-        // Each ray represents one sample across the camera's forward field of view.
-        // A ray can only select the first colliding block, so blocks behind walls
-        // or other blocks are never included.
-        Set<BlockPos> visibleBlocks = new LinkedHashSet<>();
-        for (int verticalSample = -2; verticalSample <= 2; verticalSample++) {
-            for (int horizontalSample = -3; horizontalSample <= 3; horizontalSample++) {
-                double horizontal = horizontalSample * 0.20D;
-                double vertical = verticalSample * 0.20D;
-                Vec3 direction = look
-                        .add(right.scale(horizontal))
-                        .add(up.scale(vertical))
-                        .normalize();
-                Vec3 end = eye.add(direction.scale(24.0D));
+        // Sweep every direction around the player, limited to a 12-block radius.
+        // Every ray selects the first solid surface it touches, never blocks behind a wall.
+        final double radius = 12.0D;
+        final double[] pitchAngles = {-0.62D, -0.40D, -0.20D, 0.0D, 0.20D, 0.40D, 0.62D};
+        Set<BlockPos> surroundingBlocks = new LinkedHashSet<>();
 
+        for (int yawIndex = 0; yawIndex < 72; yawIndex++) {
+            double yaw = (Math.PI * 2.0D * yawIndex) / 72.0D;
+            for (double pitch : pitchAngles) {
+                double horizontal = Math.cos(pitch);
+                Vec3 direction = new Vec3(
+                        -Math.sin(yaw) * horizontal,
+                        Math.sin(pitch),
+                        Math.cos(yaw) * horizontal
+                );
+                Vec3 end = eye.add(direction.scale(radius));
                 net.minecraft.world.phys.BlockHitResult hit = level.clip(
                         new net.minecraft.world.level.ClipContext(
                                 eye,
@@ -77,73 +71,90 @@ visible_only_method = """    public static void spawnVisibleTerrainFragments(Loc
                     continue;
                 }
 
-                BlockPos blockPos = hit.getBlockPos().immutable();
-                BlockState state = level.getBlockState(blockPos);
+                BlockPos pos = hit.getBlockPos().immutable();
+                BlockState state = level.getBlockState(pos);
                 if (!state.isAir()
                         && state.getRenderShape() == RenderShape.MODEL
-                        && state.getFluidState().isEmpty()) {
-                    visibleBlocks.add(blockPos);
+                        && state.getFluidState().isEmpty()
+                        && state.isSolidRender(level, pos)) {
+                    surroundingBlocks.add(pos);
                 }
             }
         }
 
-        // A single activation creates one burst; never keep sampling random terrain
-        // while Time Erase is active.
+        // One tetrahedral shard per surrounding surface block. Each shard has four
+        // triangular faces, so the effect is angular debris instead of tiny cubes.
         terrainFragments.clear();
-        RandomSource random = level.random;
-        List<BlockPos> visibleBlockList = new ArrayList<>(visibleBlocks);
-        int blocksToSpawn = Math.min(18, visibleBlockList.size());
-        for (int blockIndex = 0; blockIndex < blocksToSpawn; blockIndex++) {
-            // Spread the cap evenly across the complete camera view, not just its lower-left area.
-            int selectedIndex = blockIndex * visibleBlockList.size() / blocksToSpawn;
-            BlockPos pos = visibleBlockList.get(selectedIndex);
+        for (BlockPos pos : surroundingBlocks) {
             BlockState state = level.getBlockState(pos);
             Vec3 blockCenter = Vec3.atCenterOf(pos);
 
-            // 3x3x3 = 27 tiny cubic chips for each visible block.
-            for (int chipX = 0; chipX < 3; chipX++) {
-                for (int chipY = 0; chipY < 3; chipY++) {
-                    for (int chipZ = 0; chipZ < 3; chipZ++) {
-                        TerrainFragments fragment = new TerrainFragments();
-                        fragment.state = state;
-                        fragment.chipX = chipX;
-                        fragment.chipY = chipY;
-                        fragment.chipZ = chipZ;
-                        fragment.pos = blockCenter;
-                        fragment.prevPos = blockCenter;
+            TerrainFragments fragment = new TerrainFragments();
+            fragment.state = state;
+            fragment.triangularShard = true;
+            fragment.pos = blockCenter;
+            fragment.prevPos = blockCenter;
 
-                        // Push each chip away from the block's center in 3D.
-                        fragment.velocity = new Vec3(
-                                (chipX - 1) * 0.018D + random.nextGaussian() * 0.005D,
-                                (chipY - 1) * 0.018D + random.nextGaussian() * 0.005D,
-                                (chipZ - 1) * 0.018D + random.nextGaussian() * 0.005D
-                        );
+            // Select a random corner and form a sharp tetrahedron inside the source block.
+            double sx = random.nextBoolean() ? -0.43D : 0.43D;
+            double sy = random.nextBoolean() ? -0.43D : 0.43D;
+            double sz = random.nextBoolean() ? -0.43D : 0.43D;
+            double shardSize = 0.30D + random.nextDouble() * 0.12D;
+            fragment.shardA = new Vec3(sx, sy, sz);
+            fragment.shardB = fragment.shardA.add(
+                    -Math.signum(sx) * shardSize,
+                    random.nextGaussian() * 0.025D,
+                    random.nextGaussian() * 0.025D
+            );
+            fragment.shardC = fragment.shardA.add(
+                    random.nextGaussian() * 0.025D,
+                    -Math.signum(sy) * shardSize,
+                    random.nextGaussian() * 0.025D
+            );
+            fragment.shardD = fragment.shardA.add(
+                    random.nextGaussian() * 0.025D,
+                    random.nextGaussian() * 0.025D,
+                    -Math.signum(sz) * shardSize
+            );
 
-                        fragment.rotX = random.nextFloat() * 360.0F;
-                        fragment.rotY = random.nextFloat() * 360.0F;
-                        fragment.rotZ = random.nextFloat() * 360.0F;
-                        fragment.prevRotX = fragment.rotX;
-                        fragment.prevRotY = fragment.rotY;
-                        fragment.prevRotZ = fragment.rotZ;
-                        fragment.rotSpeedX = random.nextFloat() * 8.0F - 4.0F;
-                        fragment.rotSpeedY = random.nextFloat() * 8.0F - 4.0F;
-                        fragment.rotSpeedZ = random.nextFloat() * 8.0F - 4.0F;
-                        fragment.prevScale = 1.0F;
-                        fragment.scale = 1.0F;
-                        fragment.age = 0;
-                        fragment.maxAge = 18 + random.nextInt(10);
-                        terrainFragments.add(fragment);
-                    }
-                }
+            Vec3 outward = blockCenter.subtract(player.position());
+            if (outward.lengthSqr() < 1.0E-5D) {
+                outward = new Vec3(
+                        random.nextGaussian(),
+                        random.nextGaussian() * 0.5D,
+                        random.nextGaussian()
+                );
             }
+            outward = outward.normalize();
+            fragment.velocity = outward.scale(0.045D + random.nextDouble() * 0.035D)
+                    .add(
+                            random.nextGaussian() * 0.012D,
+                            random.nextGaussian() * 0.012D,
+                            random.nextGaussian() * 0.012D
+                    );
+
+            fragment.rotX = random.nextFloat() * 360.0F;
+            fragment.rotY = random.nextFloat() * 360.0F;
+            fragment.rotZ = random.nextFloat() * 360.0F;
+            fragment.prevRotX = fragment.rotX;
+            fragment.prevRotY = fragment.rotY;
+            fragment.prevRotZ = fragment.rotZ;
+            fragment.rotSpeedX = random.nextFloat() * 12.0F - 6.0F;
+            fragment.rotSpeedY = random.nextFloat() * 12.0F - 6.0F;
+            fragment.rotSpeedZ = random.nextFloat() * 12.0F - 6.0F;
+            fragment.prevScale = 1.0F;
+            fragment.scale = 1.0F;
+            fragment.age = 0;
+            fragment.maxAge = 28 + random.nextInt(10);
+            terrainFragments.add(fragment);
         }
     }
 
 """
-source = source[:start] + visible_only_method + source[end:]
+source = source[:start] + new_effect_method + source[end:]
 effect.write_text(source, encoding="utf-8")
 
-# Spawn the visible-block burst only on the transition into Time Erase.
+# Fire the debris burst once on the transition into Time Erase.
 replace_once(
     client,
     """                if (PKC.isUsingTimeErase()){
@@ -153,37 +164,139 @@ replace_once(
                     isUsingTimeErase = true;""",
     """                if (PKC.isUsingTimeErase()){
                     if (!isUsingTimeErase) {
-                        ClientEffectUtil.spawnVisibleTerrainFragments(player);
+                        ClientEffectUtil.spawnTimeEraseShards(player);
                     }
                     isUsingTimeErase = true;""",
-    "one-shot Time Erase fragment trigger"
+    "one-shot 360-degree Time Erase shard trigger"
 )
 
-# Store the chip's cell inside the original block.
+# Store a tetrahedron's four local vertices in each fragment.
 replace_once(
     fragments,
     "    public BlockState state;\n",
-    "    public BlockState state;\n    public int chipX;\n    public int chipY;\n    public int chipZ;\n",
-    "TerrainFragments chip coordinates"
+    "    public BlockState state;\n    public boolean triangularShard;\n    public Vec3 shardA;\n    public Vec3 shardB;\n    public Vec3 shardC;\n    public Vec3 shardD;\n",
+    "TerrainFragments triangular shard geometry"
 )
 
-# Render each fragment as a true 1/3-scale cube in its original 3x3x3 cell.
-replace_once(
-    renderer,
-    """            // Center rotation
-            poseStack.translate(-0.5, -0.5, -0.5);
-            poseStack.scale(scale,scale,scale);""",
-    """            // Place one 1/3-sized chip in its original 3x3x3 block cell.
-            poseStack.translate(
-                    -0.5 + frag.chipX / 3.0,
-                    -0.5 + frag.chipY / 3.0,
-                    -0.5 + frag.chipZ / 3.0
-            );
-            poseStack.scale(scale / 3.0F, scale / 3.0F, scale / 3.0F);""",
-    "cubic chip render transform"
-)
+# Replace the block-cube renderer with textured tetrahedral shard rendering.
+s = renderer.read_text(encoding="utf-8")
+start_marker = "    @Unique\n    public void rdbt$renderTerrainFragments("
+end_marker = "    @Unique\n    public void rdbt$renderRTZBlockFragments("
+start = s.find(start_marker)
+end = s.find(end_marker, start + len(start_marker))
+if start < 0 or end < 0:
+    raise SystemExit("Could not locate terrain fragment renderer methods.")
 
-# Hide all normal chunk layers throughout Time Erase, including its fade-out.
+new_renderer = """    @Unique
+    public void rdbt$renderTerrainFragments(
+            PoseStack poseStack,
+            MultiBufferSource buffer,
+            Camera camera,
+            float partialTick
+    ) {
+        Player pl = Minecraft.getInstance().player;
+        if (pl != null && (((TimeStop) pl.level()).inTimeStopRange(pl))) {
+            partialTick = 0;
+        }
+
+        Minecraft mc = Minecraft.getInstance();
+        BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
+        Vec3 cam = camera.getPosition();
+        Iterator<TerrainFragments> it = ClientEffectUtil.terrainFragments.iterator();
+
+        while (it.hasNext()) {
+            TerrainFragments frag = it.next();
+            if (frag.scale <= 0) {
+                it.remove();
+                continue;
+            }
+
+            poseStack.pushPose();
+            double x = Mth.lerp(partialTick, frag.prevPos.x, frag.pos.x) - cam.x;
+            double y = Mth.lerp(partialTick, frag.prevPos.y, frag.pos.y) - cam.y;
+            double z = Mth.lerp(partialTick, frag.prevPos.z, frag.pos.z) - cam.z;
+            float scale = Mth.lerp(partialTick, frag.prevScale, frag.scale);
+
+            poseStack.translate(x, y, z);
+            float rx = Mth.lerp(partialTick, frag.prevRotX, frag.rotX);
+            float ry = Mth.lerp(partialTick, frag.prevRotY, frag.rotY);
+            float rz = Mth.lerp(partialTick, frag.prevRotZ, frag.rotZ);
+            poseStack.mulPose(Axis.XP.rotationDegrees(rx));
+            poseStack.mulPose(Axis.YP.rotationDegrees(ry));
+            poseStack.mulPose(Axis.ZP.rotationDegrees(rz));
+
+            if (frag.triangularShard) {
+                poseStack.scale(scale, scale, scale);
+                net.minecraft.client.renderer.texture.TextureAtlasSprite sprite =
+                        dispatcher.getBlockModelShaper().getParticleIcon(frag.state);
+                VertexConsumer consumer = buffer.getBuffer(
+                        RenderType.entityCutoutNoCull(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS)
+                );
+                Matrix4f matrix = poseStack.last().pose();
+                org.joml.Matrix3f normalMatrix = poseStack.last().normal();
+
+                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardA, frag.shardB, frag.shardC, sprite, 1.0F);
+                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardA, frag.shardD, frag.shardB, sprite, 0.82F);
+                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardA, frag.shardC, frag.shardD, sprite, 0.92F);
+                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardB, frag.shardD, frag.shardC, sprite, 0.72F);
+            } else {
+                poseStack.translate(-0.5, -0.5, -0.5);
+                poseStack.scale(scale, scale, scale);
+                dispatcher.renderSingleBlock(
+                        frag.state,
+                        poseStack,
+                        buffer,
+                        LightTexture.FULL_BRIGHT,
+                        OverlayTexture.NO_OVERLAY
+                );
+            }
+
+            poseStack.popPose();
+        }
+    }
+
+    @Unique
+    private void rdbt$emitTriangle(
+            VertexConsumer consumer,
+            Matrix4f matrix,
+            org.joml.Matrix3f normalMatrix,
+            Vec3 a,
+            Vec3 b,
+            Vec3 c,
+            net.minecraft.client.renderer.texture.TextureAtlasSprite sprite,
+            float shade
+    ) {
+        Vec3 normal = b.subtract(a).cross(c.subtract(a));
+        if (normal.lengthSqr() < 1.0E-8D) {
+            return;
+        }
+        normal = normal.normalize();
+
+        float u0 = sprite.getU0();
+        float u1 = sprite.getU1();
+        float v0 = sprite.getV0();
+        float v1 = sprite.getV1();
+        int light = LightTexture.FULL_BRIGHT;
+
+        consumer.vertex(matrix, (float) a.x, (float) a.y, (float) a.z)
+                .color(shade, shade, shade, 1.0F).uv(u0, v1)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        consumer.vertex(matrix, (float) b.x, (float) b.y, (float) b.z)
+                .color(shade, shade, shade, 1.0F).uv(u1, v1)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        consumer.vertex(matrix, (float) c.x, (float) c.y, (float) c.z)
+                .color(shade, shade, shade, 1.0F).uv(u0, v0)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+    }
+
+"""
+s = s[:start] + new_renderer + s[end:]
+renderer.write_text(s, encoding="utf-8")
+
+# Hide the terrain only while the ability itself is active, not during its fade-out.
 replace_once(
     renderer,
     """        if (ClientUtil.isUnderRTZ() && ClientUtil.rtzTicks >= 4 && ClientUtil.rtzTicks < ClientUtil.RTZ_DURATION - 4) {
@@ -193,19 +306,11 @@ replace_once(
     """        if (ClientUtil.isUnderRTZ() && ClientUtil.rtzTicks >= 4 && ClientUtil.rtzTicks < ClientUtil.RTZ_DURATION - 4) {
             ci.cancel();
         }
-        if (ClientUtil.renderTimeErase()) {
+        if (ClientUtil.isUsingTimeErase) {
             ci.cancel();
         }
     }""",
-    "hide normal world chunk layers during Time Erase"
+    "immediate terrain restoration at Time Erase end"
 )
 
-# Keep clouds hidden until the Time Erase skybox fade has completely ended.
-replace_once(
-    renderer,
-    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
-    "if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {",
-    "cloud visibility during Time Erase fade"
-)
-
-print("Applied visible-only Time Erase block disintegration and cosmic-only terrain rendering.")
+print("Applied: 360-degree nearby block shatter into textured triangular shards; terrain restores immediately after Time Erase.")

@@ -299,7 +299,7 @@ new_renderer = """    @Unique
         );
 
         for (TerrainFragments frag : ClientEffectUtil.terrainFragments) {
-            if (frag.age < 0 || frag.scale <= 0.0F || frag.age >= 24) {
+            if (frag.scale <= 0.0F || frag.age >= 24) {
                 continue;
             }
 
@@ -314,6 +314,19 @@ new_renderer = """    @Unique
 
             poseStack.pushPose();
             poseStack.translate(x, y, z);
+
+            // Before its wave delay expires, the block remains whole and fully textured.
+            if (frag.age < 0) {
+                poseStack.pushPose();
+                poseStack.translate(-0.5D, -0.5D, -0.5D);
+                dispatcher.renderSingleBlock(
+                        frag.state, poseStack, buffer,
+                        LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
+                );
+                poseStack.popPose();
+                poseStack.popPose();
+                continue;
+            }
 
             for (int piece = 0; piece < rdbt$SHARD_TETRAHEDRA.length; piece++) {
                 double[][] points = rdbt$SHARD_TETRAHEDRA[piece];
@@ -436,6 +449,11 @@ new_renderer = """    @Unique
                 .color(red, green, blue, alpha).uv(ub, vb)
                 .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(LightTexture.FULL_BRIGHT)
                 .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        out.vertex(matrix, (float) c.x, (float) c.y, (float) c.z)
+                .color(red, green, blue, alpha).uv(uc, vc)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        // RenderType.entityTranslucent uses quads; duplicate the final corner to form a triangle.
         out.vertex(matrix, (float) c.x, (float) c.y, (float) c.z)
                 .color(red, green, blue, alpha).uv(uc, vc)
                 .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(LightTexture.FULL_BRIGHT)

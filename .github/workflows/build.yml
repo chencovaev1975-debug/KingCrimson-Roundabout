@@ -1,0 +1,50 @@
+name: Build King Crimson Roundabout
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "build/**" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout addon repository
+        uses: actions/checkout@v4
+        with:
+          path: addon
+
+      - name: Checkout Roundabout upstream
+        uses: actions/checkout@v4
+        with:
+          repository: Hydraheads/RoundaboutMod
+          ref: 16ae85aa2338269192923418ad42930215a74f0c
+          path: roundabout
+
+      - name: Apply King Crimson visual patch
+        run: |
+          cp addon/README.md roundabout/README-addon.md
+          python3 addon/patches/apply_patch.py
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: roundabout/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Build Fabric jar
+        working-directory: roundabout
+        run: chmod +x ./gradlew && ./gradlew :fabric:build --no-daemon
+
+      - name: Upload Fabric jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingCrimson-Roundabout-Fabric-1.20.1
+          path: roundabout/fabric/build/libs/*-fabric-1.20.1.jar
+          if-no-files-found: error
+          retention-days: 30

@@ -381,10 +381,10 @@ renderer.write_text(s, encoding="utf-8")
 replace_once(
     renderer,
     """        rdbt$renderTerrainFragments(
-                $0,
+                $$0,
                 buffer,
-                $3,
-                $2
+                $$3,
+                $$2
         );
 
         buffer.endBatch();""",

@@ -115,6 +115,53 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
 source = source[:start] + new_effect_method + source[end:]
 effect.write_text(source, encoding="utf-8")
 
+replace_once(
+    effect,
+    """import net.minecraft.core.Direction;""",
+    """import net.minecraft.core.Direction;
+import net.minecraft.core.particles.DustParticleOptions;""",
+    "red aura particle import"
+)
+replace_once(
+    effect,
+    """import org.joml.Matrix4f;""",
+    """import org.joml.Matrix4f;
+import org.joml.Vector3f;""",
+    "red aura vector import"
+)
+replace_once(
+    effect,
+    """    public static void renderPurpleBox(""",
+    """    public static void spawnKingCrimsonAura(LocalPlayer player) {
+        if (player == null) {
+            return;
+        }
+
+        Level level = player.level();
+        RandomSource random = level.random;
+        DustParticleOptions aura = new DustParticleOptions(
+                new Vector3f(0.82F, 0.012F, 0.028F),
+                1.25F
+        );
+
+        // A loose, continuously replenished particle volume around the player's body.
+        for (int i = 0; i < 10; i++) {
+            double angle = random.nextDouble() * Math.PI * 2.0D;
+            double radius = 0.36D + random.nextDouble() * 0.24D;
+            double x = player.getX() + Math.cos(angle) * radius;
+            double y = player.getY() + 0.08D + random.nextDouble() * Math.max(0.8D, player.getBbHeight());
+            double z = player.getZ() + Math.sin(angle) * radius;
+            double vx = (random.nextDouble() - 0.5D) * 0.008D;
+            double vy = 0.006D + random.nextDouble() * 0.012D;
+            double vz = (random.nextDouble() - 0.5D) * 0.008D;
+            level.addParticle(aura, x, y, z, vx, vy, vz);
+        }
+    }
+
+    public static void renderPurpleBox(""",
+    "King Crimson particle aura helper"
+)
+
 # Fire the debris burst once on the transition into Time Erase.
 replace_once(
     client,
@@ -123,7 +170,11 @@ replace_once(
                         ClientEffectUtil.spawnTerrainFragment(player);
                     }
                     isUsingTimeErase = true;""",
-    """                if (PKC.isUsingTimeErase()){
+    """                if (clientTicker % 2 == 0 && ((StandUser) player).roundabout$getStand() != null
+                        && ((StandUser) player).roundabout$getStand().isAlive()) {
+                    ClientEffectUtil.spawnKingCrimsonAura(player);
+                }
+                if (PKC.isUsingTimeErase()){
                     if (!isUsingTimeErase) {
                         ClientEffectUtil.spawnTimeEraseShards(player);
                     }
@@ -366,7 +417,6 @@ replace_once(
                 $$3,
                 $$2
         );
-        rdbt$renderKingCrimsonAura($$0, buffer, $$3, $$2);
         buffer.endBatch();
         RenderSystem.lineWidth(1.0F);""",
     "render the King Crimson aura"

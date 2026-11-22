@@ -42,10 +42,13 @@ jobs:
         working-directory: roundabout
         run: chmod +x ./gradlew && ./gradlew :fabric:build --no-daemon
 
+      - name: Inspect build outputs
+        run: find roundabout -type f -path "*/build/libs/*" -print
+
       - name: Upload Fabric jar
         uses: actions/upload-artifact@v4
         with:
           name: KingCrimson-Roundabout-Fabric-1.20.1
-          path: roundabout/fabric/build/libs/*-fabric-1.20.1.jar
+          path: roundabout/fabric/build/libs/*.jar
           if-no-files-found: error
           retention-days: 30

@@ -252,6 +252,10 @@ s = s.replace(
     "import org.joml.Matrix4f;",
     "import org.joml.Matrix4f;\nimport org.joml.Matrix3f;"
 )
+s = s.replace(
+    "import java.util.Iterator;",
+    "import java.util.Iterator;\nimport java.util.ArrayList;\nimport java.util.Comparator;\nimport java.util.HashMap;\nimport java.util.List;\nimport java.util.Map;\nimport java.util.Random;"
+)
 start_marker = "    @Unique\n    public void rdbt$renderTerrainFragments("
 end_marker = "    @Unique\n    public void rdbt$renderRTZBlockFragments("
 start = s.find(start_marker)

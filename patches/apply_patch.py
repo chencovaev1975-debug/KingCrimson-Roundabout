@@ -244,58 +244,57 @@ new_renderer = """    @Unique
                 continue;
             }
 
-            poseStack.pushPose();
             double x = Mth.lerp(partialTick, frag.prevPos.x, frag.pos.x) - cam.x;
             double y = Mth.lerp(partialTick, frag.prevPos.y, frag.pos.y) - cam.y;
             double z = Mth.lerp(partialTick, frag.prevPos.z, frag.pos.z) - cam.z;
-            float scale = Mth.lerp(partialTick, frag.prevScale, frag.scale);
-
-            poseStack.translate(x, y, z);
             float rx = Mth.lerp(partialTick, frag.prevRotX, frag.rotX);
             float ry = Mth.lerp(partialTick, frag.prevRotY, frag.rotY);
             float rz = Mth.lerp(partialTick, frag.prevRotZ, frag.rotZ);
-            poseStack.mulPose(Axis.XP.rotationDegrees(rx));
-            poseStack.mulPose(Axis.YP.rotationDegrees(ry));
-            poseStack.mulPose(Axis.ZP.rotationDegrees(rz));
 
-            if (frag.triangularShard && frag.age < 16) {
-                // Crack stage: keep the source block in place before it breaks apart.
+            poseStack.pushPose();
+            poseStack.translate(x, y, z);
+
+            if (frag.age < 16) {
+                // Stage 1: the original block stays intact while visible fissures spread.
+                poseStack.pushPose();
                 poseStack.translate(-0.5, -0.5, -0.5);
                 dispatcher.renderSingleBlock(
-                        frag.state,
-                        poseStack,
-                        buffer,
-                        LightTexture.FULL_BRIGHT,
-                        OverlayTexture.NO_OVERLAY
+                        frag.state, poseStack, buffer,
+                        LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
                 );
-                poseStack.translate(0.5, 0.5, 0.5);
+                poseStack.popPose();
                 rdbt$renderCrackLines(poseStack, buffer, frag.age);
-            } else if (frag.triangularShard) {
-                poseStack.scale(scale, scale, scale);
-                net.minecraft.client.renderer.texture.TextureAtlasSprite sprite =
-                        dispatcher.getBlockModelShaper().getParticleIcon(frag.state);
-                VertexConsumer consumer = buffer.getBuffer(
-                        RenderType.entityCutoutNoCull(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS)
-                );
-                Matrix4f matrix = poseStack.last().pose();
-                org.joml.Matrix3f normalMatrix = poseStack.last().normal();
-
-                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardA, frag.shardB, frag.shardC, sprite, 1.0F);
-                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardA, frag.shardD, frag.shardB, sprite, 0.82F);
-                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardA, frag.shardC, frag.shardD, sprite, 0.92F);
-                rdbt$emitTriangle(consumer, matrix, normalMatrix, frag.shardB, frag.shardD, frag.shardC, sprite, 0.72F);
             } else {
-                poseStack.translate(-0.5, -0.5, -0.5);
-                poseStack.scale(scale, scale, scale);
-                dispatcher.renderSingleBlock(
-                        frag.state,
-                        poseStack,
-                        buffer,
-                        LightTexture.FULL_BRIGHT,
-                        OverlayTexture.NO_OVERLAY
-                );
+                // Stage 2: split the block into eight clearly visible textured chunks.
+                // Each chunk separates and rises slowly; the source world block is untouched.
+                float elapsed = frag.age - 16;
+                float spread = Math.min(0.20F, elapsed * 0.006F);
+                float rise = Math.min(0.18F, elapsed * 0.005F);
+                for (int ix = 0; ix < 2; ix++) {
+                    for (int iy = 0; iy < 2; iy++) {
+                        for (int iz = 0; iz < 2; iz++) {
+                            poseStack.pushPose();
+                            float sx = ix == 0 ? -1.0F : 1.0F;
+                            float sy = iy == 0 ? -1.0F : 1.0F;
+                            float sz = iz == 0 ? -1.0F : 1.0F;
+                            poseStack.translate(
+                                    -0.5F + ix * 0.5F + sx * spread,
+                                    -0.5F + iy * 0.5F + rise + Math.max(0.0F, sy) * spread,
+                                    -0.5F + iz * 0.5F + sz * spread
+                            );
+                            poseStack.mulPose(Axis.XP.rotationDegrees(rx * 0.18F + sx * elapsed * 0.8F));
+                            poseStack.mulPose(Axis.YP.rotationDegrees(ry * 0.18F + sy * elapsed * 0.9F));
+                            poseStack.mulPose(Axis.ZP.rotationDegrees(rz * 0.18F + sz * elapsed * 0.7F));
+                            poseStack.scale(0.5F, 0.5F, 0.5F);
+                            dispatcher.renderSingleBlock(
+                                    frag.state, poseStack, buffer,
+                                    LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
+                            );
+                            poseStack.popPose();
+                        }
+                    }
+                }
             }
-
             poseStack.popPose();
         }
     }
@@ -306,57 +305,21 @@ new_renderer = """    @Unique
         Matrix4f matrix = poseStack.last().pose();
         float spread = Math.min(0.46F, 0.12F + age * 0.022F);
         float lift = 0.503F;
-        // Three branching jagged fissures across the top face.
+        // Dark, branching fissures on the upper surface, widening during the crack phase.
         rdbt$crackSegment(lines, matrix, -spread, lift, -0.08F, -0.05F, lift, 0.02F);
         rdbt$crackSegment(lines, matrix, -0.05F, lift, 0.02F, 0.12F, lift, 0.13F);
         rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, spread, lift, 0.30F);
         rdbt$crackSegment(lines, matrix, -0.05F, lift, 0.02F, -0.20F, lift, 0.24F);
         rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, 0.28F, lift, -0.12F);
+        rdbt$crackSegment(lines, matrix, 0.12F, lift, 0.13F, 0.04F, lift, -0.28F);
     }
 
     @Unique
     private void rdbt$crackSegment(VertexConsumer lines, Matrix4f matrix,
                                    float ax, float ay, float az,
                                    float bx, float by, float bz) {
-        lines.vertex(matrix, ax, ay, az).color(0.08F, 0.02F, 0.02F, 1.0F).endVertex();
-        lines.vertex(matrix, bx, by, bz).color(0.08F, 0.02F, 0.02F, 1.0F).endVertex();
-    }
-
-    @Unique
-    private void rdbt$emitTriangle(
-            VertexConsumer consumer,
-            Matrix4f matrix,
-            org.joml.Matrix3f normalMatrix,
-            Vec3 a,
-            Vec3 b,
-            Vec3 c,
-            net.minecraft.client.renderer.texture.TextureAtlasSprite sprite,
-            float shade
-    ) {
-        Vec3 normal = b.subtract(a).cross(c.subtract(a));
-        if (normal.lengthSqr() < 1.0E-8D) {
-            return;
-        }
-        normal = normal.normalize();
-
-        float u0 = sprite.getU0();
-        float u1 = sprite.getU1();
-        float v0 = sprite.getV0();
-        float v1 = sprite.getV1();
-        int light = LightTexture.FULL_BRIGHT;
-
-        consumer.vertex(matrix, (float) a.x, (float) a.y, (float) a.z)
-                .color(shade, shade, shade, 1.0F).uv(u0, v1)
-                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light)
-                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
-        consumer.vertex(matrix, (float) b.x, (float) b.y, (float) b.z)
-                .color(shade, shade, shade, 1.0F).uv(u1, v1)
-                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light)
-                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
-        consumer.vertex(matrix, (float) c.x, (float) c.y, (float) c.z)
-                .color(shade, shade, shade, 1.0F).uv(u0, v0)
-                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(light)
-                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        lines.vertex(matrix, ax, ay, az).color(0.03F, 0.01F, 0.01F, 1.0F).endVertex();
+        lines.vertex(matrix, bx, by, bz).color(0.03F, 0.01F, 0.01F, 1.0F).endVertex();
     }
 
 """

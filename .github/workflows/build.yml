@@ -25,9 +25,10 @@ jobs:
           path: roundabout
 
       - name: Apply King Crimson visual patch
+        working-directory: roundabout
         run: |
-          cp addon/README.md roundabout/README-addon.md
-          python3 addon/patches/apply_patch.py
+          cp ../addon/README.md README-addon.md
+          python3 ../addon/patches/apply_patch.py
 
       - name: Set up Java 17
         uses: actions/setup-java@v4

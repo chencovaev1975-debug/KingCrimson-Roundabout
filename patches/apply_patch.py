@@ -25,28 +25,24 @@ if start < 0 or end < 0:
     raise SystemExit("Could not locate the original spawnTerrainFragment method.")
 
 new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer player) {
-        if (player == null) {
-            return;
-        }
-        if (((TimeStop) player.level()).inTimeStopRange(player)) {
+        if (player == null || ((TimeStop) player.level()).inTimeStopRange(player)) {
             return;
         }
 
         Level level = player.level();
-        Vec3 eye = player.getEyePosition();
         RandomSource random = level.random;
-
-        // Collect exposed solid blocks in a compact sphere around the player.
-        // This does not depend on the optional Roundabout terrain-fragment setting.
         final int radius = 7;
         final int minY = Mth.floor(player.getY()) - 3;
         final int maxY = Mth.floor(player.getY()) + 5;
-        Set<BlockPos> surroundingBlocks = new LinkedHashSet<>();
         BlockPos center = player.blockPosition();
-        outer:
+        List<BlockPos> surroundingBlocks = new ArrayList<>();
+
+        // Gather exposed, full block models around the player.
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                if (dx * dx + dz * dz > radius * radius) continue;
+                if (dx * dx + dz * dz > radius * radius) {
+                    continue;
+                }
                 for (int y = minY; y <= maxY; y++) {
                     BlockPos pos = new BlockPos(center.getX() + dx, y, center.getZ() + dz);
                     BlockState state = level.getBlockState(pos);
@@ -54,6 +50,7 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
                             || !state.getFluidState().isEmpty() || !state.isSolidRender(level, pos)) {
                         continue;
                     }
+
                     boolean exposed = false;
                     for (Direction direction : Direction.values()) {
                         if (level.getBlockState(pos.relative(direction)).isAir()) {
@@ -63,14 +60,17 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
                     }
                     if (exposed) {
                         surroundingBlocks.add(pos.immutable());
-                        if (surroundingBlocks.size() >= 180) break outer;
                     }
                 }
             }
         }
 
-        // Each exposed block becomes one fragment group. The renderer splits
-        // the group into four large textured chunks after the crack phase.
+        // Keep the nearest 180 blocks so the effect stays bounded and evenly centered.
+        surroundingBlocks.sort(Comparator.comparingDouble(pos -> pos.distSqr(center)));
+        if (surroundingBlocks.size() > 180) {
+            surroundingBlocks = new ArrayList<>(surroundingBlocks.subList(0, 180));
+        }
+
         terrainFragments.clear();
         for (BlockPos pos : surroundingBlocks) {
             BlockState state = level.getBlockState(pos);
@@ -90,23 +90,23 @@ new_effect_method = """    public static void spawnTimeEraseShards(LocalPlayer p
                 );
             }
             outward = outward.normalize();
-            // Fragments stay still while the fissure opens, then make a short,
-            // direct upward/outward flight. They do not spin.
-            fragment.velocity = new Vec3(outward.x * 0.012D, 0.036D, outward.z * 0.012D);
+            fragment.velocity = outward.scale(0.018D).add(0.0D, 0.010D, 0.0D);
 
-            fragment.rotX = random.nextFloat() * 360.0F;
-            fragment.rotY = random.nextFloat() * 360.0F;
-            fragment.rotZ = random.nextFloat() * 360.0F;
-            fragment.prevRotX = fragment.rotX;
-            fragment.prevRotY = fragment.rotY;
-            fragment.prevRotZ = fragment.rotZ;
+            // Stagger the fracture start into a radial wave from the player.
+            int delay = (int) Math.round(Math.sqrt(pos.distSqr(center)) * 0.5D);
+            fragment.age = -delay;
+            fragment.maxAge = 24;
+            fragment.scale = 1.0F;
+            fragment.prevScale = 1.0F;
+            fragment.rotX = 0.0F;
+            fragment.rotY = 0.0F;
+            fragment.rotZ = 0.0F;
+            fragment.prevRotX = 0.0F;
+            fragment.prevRotY = 0.0F;
+            fragment.prevRotZ = 0.0F;
             fragment.rotSpeedX = 0.0F;
             fragment.rotSpeedY = 0.0F;
             fragment.rotSpeedZ = 0.0F;
-            fragment.prevScale = 1.0F;
-            fragment.scale = 1.0F;
-            fragment.age = 0;
-            fragment.maxAge = 32; // 16 crack ticks + 10 flight ticks + 6 dissolve ticks
             terrainFragments.add(fragment);
         }
     }
@@ -162,7 +162,7 @@ replace_once(
     "King Crimson particle aura helper"
 )
 
-# Fire the debris burst once on the transition into Time Erase.
+# Start the block fracture only once when Time Erase activates; keep the existing aura hook.
 replace_once(
     client,
     """                if (PKC.isUsingTimeErase()){
@@ -170,57 +170,79 @@ replace_once(
                         ClientEffectUtil.spawnTerrainFragment(player);
                     }
                     isUsingTimeErase = true;""",
-    """                if (clientTicker % 2 == 0 && ((StandUser) player).roundabout$getStand() != null
-                        && ((StandUser) player).roundabout$getStand().isAlive()) {
-                    ClientEffectUtil.spawnKingCrimsonAura(player);
-                }
-                if (PKC.isUsingTimeErase()){
+    """                if (PKC.isUsingTimeErase()){
+                    if (!isUsingTimeErase) {
+                        ClientEffectUtil.spawnTimeEraseShards(player);
+                    }
+                    if (clientTicker % 2 == 0 && ((StandUser) player).roundabout$getStand() != null
+                            && ((StandUser) player).roundabout$getStand().isAlive()) {
+                        ClientEffectUtil.spawnKingCrimsonAura(player);
+                    }
                     isUsingTimeErase = true;""",
-    "one-shot 360-degree Time Erase shard trigger"
+    "one-shot block fracture wave and preserved King Crimson particle aura"
 )
 
-# Keep each original block visible while its surface cracks; only then lift its shards.
-replace_once(
-    effect,
-    """    public static void updateTerrainFragments() {
-        if (ConfigManager.getClientConfig() != null && ConfigManager.getClientConfig().generalSettings != null &&
-                !ConfigManager.getClientConfig().generalSettings.timeEraseBlocks){
+# Advance each block through an 8-tick crack phase, a 10-tick flight, and a 6-tick dissolve.
+source = effect.read_text(encoding="utf-8")
+update_start = "    public static void updateTerrainFragments() {"
+update_end = "    /**\n     * Renders wireframe boxes"
+a = source.find(update_start)
+b = source.find(update_end, a + len(update_start))
+if a < 0 or b < 0:
+    raise SystemExit("Could not locate updateTerrainFragments method.")
+
+new_update_method = """    public static void updateTerrainFragments() {
+        if (!ClientUtil.isUsingTimeErase) {
+            terrainFragments.clear();
             return;
         }
-""",
-    """    public static void updateTerrainFragments() {
-""",
-    "always update the custom Time Erase fragments"
-)
 
-replace_once(
-    effect,
-    """            frag.velocity = frag.velocity.add(0, 0.005, 0);
+        Player player = ClientUtil.getPlayer();
+        if (player != null && (((TimeStop) player.level()).inTimeStopRange(player))) {
+            return;
+        }
 
-            frag.pos = frag.pos.add(frag.velocity);""",
-    """            if (frag.age >= 16 && frag.age < 26) {
-                // Ten ticks = 0.5 seconds at Minecraft's 20 ticks per second.
+        Iterator<TerrainFragments> it = terrainFragments.iterator();
+        while (it.hasNext()) {
+            TerrainFragments frag = it.next();
+
+            frag.prevPos = frag.pos;
+            frag.prevRotX = frag.rotX;
+            frag.prevRotY = frag.rotY;
+            frag.prevRotZ = frag.rotZ;
+            frag.prevScale = frag.scale;
+
+            // Negative age is the per-block propagation delay.
+            if (frag.age < 0) {
+                frag.age++;
+                continue;
+            }
+
+            // The shards drift away from the block center for 10 ticks (0.5 seconds).
+            if (frag.age >= 8 && frag.age < 18) {
                 frag.pos = frag.pos.add(frag.velocity);
-            }""",
-    "crack pause and slow shard lift"
-)
+            }
 
-replace_once(
-    effect,
-    """            if (ClientUtil.isUsingTimeErase && frag.age < frag.maxAge) {
+            if (frag.age < 18) {
                 frag.scale = 1.0F;
             } else {
-                frag.scale = Math.max(0.0F, frag.scale - 0.05F);
-            }""",
-    """            if (ClientUtil.isUsingTimeErase && frag.age < 26) {
-                frag.scale = 1.0F;
-            } else {
-                // Six ticks of smooth transparency fade after the short flight.
-                frag.scale = Math.max(0.0F, frag.scale - 0.17F);
-            }""",
-    "gradual shard evaporation"
-)
+                frag.scale = Mth.clamp(1.0F - (frag.age - 18) / 6.0F, 0.0F, 1.0F);
+            }
 
+            frag.age++;
+            if (frag.age >= 24 || frag.scale <= 0.0F) {
+                it.remove();
+            }
+        }
+    }
+
+"""
+source = source.slice(0, a) + new_update_method + source.slice(b);
+effect.write_text(source, encoding="utf-8");
+
+# Replace the original renderer with six true tetrahedral wedges. Exterior faces retain the block
+# atlas texture; every interior cut face is full-bright red/purple. Shards open by 0.03-0.08 blocks,
+# tilt only 2-5 degrees, then travel for 0.5 seconds without continuous spinning.
 # Replace the block-cube renderer with textured tetrahedral shard rendering.
 s = renderer.read_text(encoding="utf-8")
 s = s.replace(
@@ -239,258 +261,185 @@ if start < 0 or end < 0:
     raise SystemExit("Could not locate terrain fragment renderer methods.")
 
 new_renderer = """    @Unique
+    private static final double[][][] rdbt$SHARD_TETRAHEDRA = {
+            { {-0.5D,-0.5D,-0.5D}, { 0.5D,-0.5D,-0.5D}, { 0.5D, 0.5D,-0.5D}, { 0.5D, 0.5D, 0.5D} },
+            { {-0.5D,-0.5D,-0.5D}, { 0.5D,-0.5D,-0.5D}, { 0.5D,-0.5D, 0.5D}, { 0.5D, 0.5D, 0.5D} },
+            { {-0.5D,-0.5D,-0.5D}, {-0.5D, 0.5D,-0.5D}, { 0.5D, 0.5D,-0.5D}, { 0.5D, 0.5D, 0.5D} },
+            { {-0.5D,-0.5D,-0.5D}, {-0.5D, 0.5D,-0.5D}, {-0.5D, 0.5D, 0.5D}, { 0.5D, 0.5D, 0.5D} },
+            { {-0.5D,-0.5D,-0.5D}, {-0.5D,-0.5D, 0.5D}, { 0.5D,-0.5D, 0.5D}, { 0.5D, 0.5D, 0.5D} },
+            { {-0.5D,-0.5D,-0.5D}, {-0.5D,-0.5D, 0.5D}, {-0.5D, 0.5D, 0.5D}, { 0.5D, 0.5D, 0.5D} }
+    };
+
+    @Unique
+    private static final int[][] rdbt$SHARD_FACES = {
+            {0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3}
+    };
+
+    @Unique
     public void rdbt$renderTerrainFragments(
             PoseStack poseStack,
             MultiBufferSource buffer,
             Camera camera,
             float partialTick
     ) {
-        Player pl = Minecraft.getInstance().player;
-        if (pl != null && (((TimeStop) pl.level()).inTimeStopRange(pl))) {
-            partialTick = 0;
+        if (!ClientUtil.isUsingTimeErase || ClientEffectUtil.terrainFragments.isEmpty()) {
+            return;
+        }
+
+        Player player = Minecraft.getInstance().player;
+        if (player != null && (((TimeStop) player.level()).inTimeStopRange(player))) {
+            partialTick = 0.0F;
         }
 
         Minecraft mc = Minecraft.getInstance();
         BlockRenderDispatcher dispatcher = mc.getBlockRenderer();
         Vec3 cam = camera.getPosition();
-        Iterator<TerrainFragments> it = ClientEffectUtil.terrainFragments.iterator();
+        VertexConsumer shardVertices = buffer.getBuffer(
+                RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS)
+        );
 
-        while (it.hasNext()) {
-            TerrainFragments frag = it.next();
-            if (frag.scale <= 0.0F) {
-                it.remove();
+        for (TerrainFragments frag : ClientEffectUtil.terrainFragments) {
+            if (frag.age < 0 || frag.scale <= 0.0F || frag.age >= 24) {
                 continue;
             }
 
             double x = Mth.lerp(partialTick, frag.prevPos.x, frag.pos.x) - cam.x;
             double y = Mth.lerp(partialTick, frag.prevPos.y, frag.pos.y) - cam.y;
             double z = Mth.lerp(partialTick, frag.prevPos.z, frag.pos.z) - cam.z;
-            float crackRotation = Mth.lerp(partialTick, frag.prevRotZ, frag.rotZ);
-            float opacity = Mth.lerp(partialTick, frag.prevScale, frag.scale);
+            float age = frag.age + partialTick;
+            float crackProgress = Mth.clamp(age / 8.0F, 0.0F, 1.0F);
+            float flightProgress = Mth.clamp((age - 8.0F) / 10.0F, 0.0F, 1.0F);
+            float opacity = Mth.clamp(Mth.lerp(partialTick, frag.prevScale, frag.scale), 0.0F, 1.0F);
+            TextureAtlasSprite sprite = dispatcher.getBlockModel(frag.state).getParticleIcon();
 
             poseStack.pushPose();
             poseStack.translate(x, y, z);
 
-            if (frag.age < 16) {
-                // The intact block is still present; the fissures are recessed bevel geometry,
-                // not black line segments painted across the surface.
-                poseStack.pushPose();
-                poseStack.translate(-0.5D, -0.5D, -0.5D);
-                dispatcher.renderSingleBlock(
-                        frag.state, poseStack, buffer,
-                        LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY
+            for (int piece = 0; piece < rdbt$SHARD_TETRAHEDRA.length; piece++) {
+                double[][] points = rdbt$SHARD_TETRAHEDRA[piece];
+                Vec3 center = new Vec3(
+                        (points[0][0] + points[1][0] + points[2][0] + points[3][0]) * 0.25D,
+                        (points[0][1] + points[1][1] + points[2][1] + points[3][1]) * 0.25D,
+                        (points[0][2] + points[1][2] + points[2][2] + points[3][2]) * 0.25D
                 );
-                poseStack.popPose();
+                Vec3 direction = center.normalize();
+                float massFactor = 0.88F + (piece % 3) * 0.10F;
+                double separation = 0.060D * crackProgress + 0.27D * flightProgress * massFactor;
+                double rise = 0.035D * flightProgress * (0.85D + (piece % 2) * 0.25D);
+                float sign = (piece % 2 == 0) ? 1.0F : -1.0F;
+                float tilt = (2.0F + piece * 0.45F) * crackProgress;
 
                 poseStack.pushPose();
-                poseStack.mulPose(Axis.YP.rotationDegrees(crackRotation));
-                rdbt$renderCrackLines(poseStack, buffer, frag.age);
-                poseStack.popPose();
-            } else {
-                // Four substantial angular shards detach from the block.
-                // They translate outward and upward for 10 ticks; their orientation never changes.
-                float flight = Mth.clamp((frag.age - 16 + partialTick) / 10.0F, 0.0F, 1.0F);
-                float separation = 0.30F * flight;
-                float extraRise = 0.07F * flight;
+                poseStack.translate(
+                        direction.x * separation,
+                        direction.y * separation + rise,
+                        direction.z * separation
+                );
+                // Only a small fixed 2-5 degree fracture tilt; no continuous shard spinning.
+                poseStack.translate(center.x, center.y, center.z);
+                poseStack.mulPose(Axis.XP.rotationDegrees(sign * tilt));
+                poseStack.mulPose(Axis.ZP.rotationDegrees(-sign * tilt * 0.65F));
+                poseStack.translate(-center.x, -center.y, -center.z);
 
-                VertexConsumer shards = buffer.getBuffer(RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS));
-                TextureAtlasSprite sprite = dispatcher.getBlockModel(frag.state).getParticleIcon();
+                for (int[] face : rdbt$SHARD_FACES) {
+                    Vec3 a = new Vec3(points[face[0]][0], points[face[0]][1], points[face[0]][2]);
+                    Vec3 b = new Vec3(points[face[1]][0], points[face[1]][1], points[face[1]][2]);
+                    Vec3 c = new Vec3(points[face[2]][0], points[face[2]][1], points[face[2]][2]);
+                    Vec3 normal = b.subtract(a).cross(c.subtract(a)).normalize();
+                    Vec3 faceCenter = a.add(b).add(c).scale(1.0D / 3.0D);
+                    if (normal.dot(faceCenter.subtract(center)) < 0.0D) {
+                        Vec3 swap = b;
+                        b = c;
+                        c = swap;
+                        normal = normal.scale(-1.0D);
+                    }
 
-                for (int piece = 0; piece < 4; piece++) {
-                    float sx = (piece == 0 || piece == 3) ? -1.0F : 1.0F;
-                    float sz = (piece < 2) ? -1.0F : 1.0F;
-                    float angle = (float) (Math.PI * 0.5D * piece) + crackRotation * ((float) Math.PI / 180.0F);
-                    float dx = Mth.cos(angle) * separation;
-                    float dz = Mth.sin(angle) * separation;
-                    float dy = extraRise + (piece % 2) * 0.025F * flight;
-
-                    poseStack.pushPose();
-                    poseStack.translate(dx, dy, dz);
-
-                    // A broad wedge cut from one corner of the original block.
-                    // Two outside faces keep the block texture; the two fresh fracture faces are darkened.
-                    Vec3 a = new Vec3(sx * 0.48D,  0.46D, sz * 0.48D);
-                    Vec3 b = new Vec3(sx * 0.48D, -0.46D, sz * 0.48D);
-                    Vec3 c = new Vec3(sx * 0.48D, -0.46D, sz * 0.06D);
-                    Vec3 d = new Vec3(sx * 0.06D, -0.46D, sz * 0.48D);
-                    rdbt$renderBlockShard(shards, poseStack, sprite, a, b, c, d, opacity);
-                    poseStack.popPose();
+                    boolean outside = rdbt$isOuterShardFace(a, b, c);
+                    if (outside) {
+                        rdbt$renderShardTriangle(
+                                shardVertices, poseStack, sprite, a, b, c, normal,
+                                true, 1.0F, 1.0F, 1.0F, opacity
+                        );
+                    } else {
+                        float red = (piece % 2 == 0) ? 0.56F : 0.38F;
+                        float green = 0.008F;
+                        float blue = (piece % 2 == 0) ? 0.11F : 0.24F;
+                        rdbt$renderShardTriangle(
+                                shardVertices, poseStack, sprite, a, b, c, normal,
+                                false, red, green, blue, opacity
+                        );
+                    }
                 }
+                poseStack.popPose();
             }
-
             poseStack.popPose();
         }
     }
 
     @Unique
-    private void rdbt$renderCrackLines(PoseStack poseStack, MultiBufferSource buffer, int age) {
-        VertexConsumer grooves = buffer.getBuffer(RenderType.debugQuads());
+    private boolean rdbt$isOuterShardFace(Vec3 a, Vec3 b, Vec3 c) {
+        final double epsilon = 0.0001D;
+        boolean xFace = Math.abs(a.x - b.x) < epsilon && Math.abs(a.x - c.x) < epsilon
+                && Math.abs(Math.abs(a.x) - 0.5D) < epsilon;
+        boolean yFace = Math.abs(a.y - b.y) < epsilon && Math.abs(a.y - c.y) < epsilon
+                && Math.abs(Math.abs(a.y) - 0.5D) < epsilon;
+        boolean zFace = Math.abs(a.z - b.z) < epsilon && Math.abs(a.z - c.z) < epsilon
+                && Math.abs(Math.abs(a.z) - 0.5D) < epsilon;
+        return xFace || yFace || zFace;
+    }
+
+    @Unique
+    private void rdbt$renderShardTriangle(
+            VertexConsumer out,
+            PoseStack poseStack,
+            TextureAtlasSprite sprite,
+            Vec3 a, Vec3 b, Vec3 c, Vec3 normal,
+            boolean outside,
+            float red, float green, float blue, float alpha
+    ) {
         Matrix4f matrix = poseStack.last().pose();
-        float spread = Math.min(1.0F, 0.34F + age * 0.042F);
-        float lift = 0.503F;
+        Matrix3f normalMatrix = poseStack.last().normal();
 
-        // Jagged main fissure and irregular branches across the top face.
-        rdbt$crackSegment(grooves, matrix, -0.46F * spread, lift, -0.34F * spread, -0.29F * spread, lift, -0.17F * spread);
-        rdbt$crackSegment(grooves, matrix, -0.29F * spread, lift, -0.17F * spread, -0.13F * spread, lift, -0.025F * spread);
-        rdbt$crackSegment(grooves, matrix, -0.13F * spread, lift, -0.025F * spread, 0.035F * spread, lift, 0.105F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.035F * spread, lift, 0.105F * spread, 0.19F * spread, lift, 0.23F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.19F * spread, lift, 0.23F * spread, 0.45F * spread, lift, 0.39F * spread);
-
-        // Branches make the fracture read as a crack network rather than parallel stripes.
-        rdbt$crackSegment(grooves, matrix, -0.29F * spread, lift, -0.17F * spread, -0.43F * spread, lift, -0.015F * spread);
-        rdbt$crackSegment(grooves, matrix, -0.43F * spread, lift, -0.015F * spread, -0.48F * spread, lift, 0.16F * spread);
-        rdbt$crackSegment(grooves, matrix, -0.13F * spread, lift, -0.025F * spread, -0.31F * spread, lift, 0.15F * spread);
-        rdbt$crackSegment(grooves, matrix, -0.31F * spread, lift, 0.15F * spread, -0.34F * spread, lift, 0.36F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.035F * spread, lift, 0.105F * spread, -0.015F * spread, lift, 0.30F * spread);
-        rdbt$crackSegment(grooves, matrix, -0.015F * spread, lift, 0.30F * spread, 0.08F * spread, lift, 0.46F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.19F * spread, lift, 0.23F * spread, 0.34F * spread, lift, 0.075F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.34F * spread, lift, 0.075F * spread, 0.48F * spread, lift, 0.005F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.19F * spread, lift, 0.23F * spread, 0.30F * spread, lift, 0.42F * spread);
-
-        // Continue the fissures across two visible side faces.
-        rdbt$crackSegment(grooves, matrix, -0.40F * spread, -0.34F * spread, 0.503F, -0.20F * spread, -0.18F * spread, 0.503F);
-        rdbt$crackSegment(grooves, matrix, -0.20F * spread, -0.18F * spread, 0.503F, 0.02F * spread, 0.00F * spread, 0.503F);
-        rdbt$crackSegment(grooves, matrix, 0.02F * spread, 0.00F * spread, 0.503F, 0.23F * spread, 0.22F * spread, 0.503F);
-        rdbt$crackSegment(grooves, matrix, 0.02F * spread, 0.00F * spread, 0.503F, -0.16F * spread, 0.23F * spread, 0.503F);
-        rdbt$crackSegment(grooves, matrix, 0.23F * spread, 0.22F * spread, 0.503F, 0.42F * spread, 0.36F * spread, 0.503F);
-
-        rdbt$crackSegment(grooves, matrix, 0.503F, -0.36F * spread, -0.34F * spread, 0.503F, -0.18F * spread, -0.16F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.503F, -0.18F * spread, -0.16F * spread, 0.503F, 0.02F * spread, 0.035F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.503F, 0.02F * spread, 0.035F * spread, 0.503F, 0.24F * spread, 0.28F * spread);
-        rdbt$crackSegment(grooves, matrix, 0.503F, 0.02F * spread, 0.035F * spread, 0.503F, 0.27F * spread, -0.13F * spread);
-    }
-
-    @Unique
-    private void rdbt$crackSegment(VertexConsumer out, Matrix4f matrix,
-                                   float ax, float ay, float az,
-                                   float bx, float by, float bz) {
-        // Work out the face normal and the perpendicular direction in that face.
-        float nx = 0.0F, ny = 0.0F, nz = 0.0F;
-        float px, py, pz;
-        if (Math.abs(ay - by) < 0.0001F) {
-            ny = ay >= 0.0F ? 1.0F : -1.0F;
-            px = -(bz - az);
-            py = 0.0F;
-            pz = bx - ax;
-        } else if (Math.abs(az - bz) < 0.0001F) {
-            nz = az >= 0.0F ? 1.0F : -1.0F;
-            px = -(by - ay);
-            py = bx - ax;
-            pz = 0.0F;
+        float ua, va, ub, vb, uc, vc;
+        if (!outside) {
+            // A single atlas sample keeps the newly exposed cut face uniformly tinted.
+            ua = ub = uc = sprite.getU(8.0D);
+            va = vb = vc = sprite.getV(8.0D);
+        } else if (Math.abs(a.x - b.x) < 0.0001D && Math.abs(a.x - c.x) < 0.0001D) {
+            ua = sprite.getU((a.y + 0.5D) * 16.0D);
+            va = sprite.getV((a.z + 0.5D) * 16.0D);
+            ub = sprite.getU((b.y + 0.5D) * 16.0D);
+            vb = sprite.getV((b.z + 0.5D) * 16.0D);
+            uc = sprite.getU((c.y + 0.5D) * 16.0D);
+            vc = sprite.getV((c.z + 0.5D) * 16.0D);
+        } else if (Math.abs(a.y - b.y) < 0.0001D && Math.abs(a.y - c.y) < 0.0001D) {
+            ua = sprite.getU((a.x + 0.5D) * 16.0D);
+            va = sprite.getV((a.z + 0.5D) * 16.0D);
+            ub = sprite.getU((b.x + 0.5D) * 16.0D);
+            vb = sprite.getV((b.z + 0.5D) * 16.0D);
+            uc = sprite.getU((c.x + 0.5D) * 16.0D);
+            vc = sprite.getV((c.z + 0.5D) * 16.0D);
         } else {
-            nx = ax >= 0.0F ? 1.0F : -1.0F;
-            px = 0.0F;
-            py = -(bz - az);
-            pz = by - ay;
+            ua = sprite.getU((a.x + 0.5D) * 16.0D);
+            va = sprite.getV((a.y + 0.5D) * 16.0D);
+            ub = sprite.getU((b.x + 0.5D) * 16.0D);
+            vb = sprite.getV((b.y + 0.5D) * 16.0D);
+            uc = sprite.getU((c.x + 0.5D) * 16.0D);
+            vc = sprite.getV((c.y + 0.5D) * 16.0D);
         }
 
-        float perpendicularLength = Mth.sqrt(px * px + py * py + pz * pz);
-        if (perpendicularLength < 0.0001F) {
-            return;
-        }
-        px /= perpendicularLength;
-        py /= perpendicularLength;
-        pz /= perpendicularLength;
-
-        float halfWidth = 0.026F + Math.min(0.010F, perpendicularLength * 0.012F);
-        float floorHalfWidth = 0.006F;
-        float lipHeight = 0.0060F;
-        float floorHeight = 0.0012F;
-
-        float lAx = ax + px * halfWidth + nx * lipHeight;
-        float lAy = ay + py * halfWidth + ny * lipHeight;
-        float lAz = az + pz * halfWidth + nz * lipHeight;
-        float lBx = bx + px * halfWidth + nx * lipHeight;
-        float lBy = by + py * halfWidth + ny * lipHeight;
-        float lBz = bz + pz * halfWidth + nz * lipHeight;
-
-        float iLAx = ax + px * floorHalfWidth + nx * floorHeight;
-        float iLAy = ay + py * floorHalfWidth + ny * floorHeight;
-        float iLAz = az + pz * floorHalfWidth + nz * floorHeight;
-        float iLBx = bx + px * floorHalfWidth + nx * floorHeight;
-        float iLBy = by + py * floorHalfWidth + ny * floorHeight;
-        float iLBz = bz + pz * floorHalfWidth + nz * floorHeight;
-
-        float iRAx = ax - px * floorHalfWidth + nx * floorHeight;
-        float iRAy = ay - py * floorHalfWidth + ny * floorHeight;
-        float iRAz = az - pz * floorHalfWidth + nz * floorHeight;
-        float iRBx = bx - px * floorHalfWidth + nx * floorHeight;
-        float iRBy = by - py * floorHalfWidth + ny * floorHeight;
-        float iRBz = bz - pz * floorHalfWidth + nz * floorHeight;
-
-        float rAx = ax - px * halfWidth + nx * lipHeight;
-        float rAy = ay - py * halfWidth + ny * lipHeight;
-        float rAz = az - pz * halfWidth + nz * lipHeight;
-        float rBx = bx - px * halfWidth + nx * lipHeight;
-        float rBy = by - py * halfWidth + ny * lipHeight;
-        float rBz = bz - pz * halfWidth + nz * lipHeight;
-
-        // Light-facing bevel, nearly-black recessed floor, and darker opposite wall.
-        rdbt$crackQuad(out, matrix,
-                lAx,lAy,lAz, lBx,lBy,lBz, iLBx,iLBy,iLBz, iLAx,iLAy,iLAz,
-                0.19F, 0.17F, 0.145F);
-        rdbt$crackQuad(out, matrix,
-                iLAx,iLAy,iLAz, iLBx,iLBy,iLBz, iRBx,iRBy,iRBz, iRAx,iRAy,iRAz,
-                0.003F, 0.0025F, 0.002F);
-        rdbt$crackQuad(out, matrix,
-                iRAx,iRAy,iRAz, iRBx,iRBy,iRBz, rBx,rBy,rBz, rAx,rAy,rAz,
-                0.028F, 0.024F, 0.020F);
-    }
-
-    @Unique
-    private void rdbt$crackQuad(VertexConsumer out, Matrix4f matrix,
-                                float x1,float y1,float z1,
-                                float x2,float y2,float z2,
-                                float x3,float y3,float z3,
-                                float x4,float y4,float z4,
-                                float red,float green,float blue) {
-        out.vertex(matrix, x1, y1, z1).color(red, green, blue, 1.0F).endVertex();
-        out.vertex(matrix, x2, y2, z2).color(red, green, blue, 1.0F).endVertex();
-        out.vertex(matrix, x3, y3, z3).color(red, green, blue, 1.0F).endVertex();
-        out.vertex(matrix, x4, y4, z4).color(red, green, blue, 1.0F).endVertex();
-    }
-
-    @Unique
-    private void rdbt$renderBlockShard(VertexConsumer out, PoseStack poseStack,
-                                       TextureAtlasSprite sprite, Vec3 a, Vec3 b, Vec3 c, Vec3 d,
-                                       float opacity) {
-        PoseStack.Pose pose = poseStack.last();
-        Matrix4f matrix = pose.pose();
-        Matrix3f normalMatrix = pose.normal();
-
-        // Original outside faces stay textured; the freshly broken faces are dark stone.
-        rdbt$shardTriangle(out, matrix, normalMatrix, sprite, a, b, c, 1.0F, 1.0F, 1.0F, opacity);
-        rdbt$shardTriangle(out, matrix, normalMatrix, sprite, a, b, d, 1.0F, 1.0F, 1.0F, opacity);
-        rdbt$shardTriangle(out, matrix, normalMatrix, sprite, a, c, d, 0.22F, 0.20F, 0.18F, opacity);
-        rdbt$shardTriangle(out, matrix, normalMatrix, sprite, b, d, c, 0.15F, 0.13F, 0.12F, opacity);
-    }
-
-    @Unique
-    private void rdbt$shardTriangle(VertexConsumer out, Matrix4f matrix, Matrix3f normalMatrix,
-                                    TextureAtlasSprite sprite, Vec3 a, Vec3 b, Vec3 c,
-                                    float red, float green, float blue, float alpha) {
-        Vec3 faceNormal = b.subtract(a).cross(c.subtract(a)).normalize();
-        float u0 = sprite.getU(0.1D);
-        float u1 = sprite.getU(15.9D);
-        float v0 = sprite.getV(0.1D);
-        float v1 = sprite.getV(15.9D);
-
-        rdbt$shardVertex(out, matrix, normalMatrix, a, u0, v0, red, green, blue, alpha, faceNormal);
-        rdbt$shardVertex(out, matrix, normalMatrix, b, u1, v0, red, green, blue, alpha, faceNormal);
-        rdbt$shardVertex(out, matrix, normalMatrix, c, u1, v1, red, green, blue, alpha, faceNormal);
-    }
-
-    @Unique
-    private void rdbt$shardVertex(VertexConsumer out, Matrix4f matrix, Matrix3f normalMatrix,
-                                  Vec3 point, float u, float v,
-                                  float red, float green, float blue, float alpha, Vec3 normal) {
-        out.vertex(matrix, (float) point.x, (float) point.y, (float) point.z)
-                .color(red, green, blue, alpha)
-                .uv(u, v)
-                .overlayCoords(OverlayTexture.NO_OVERLAY)
-                .uv2(LightTexture.FULL_BRIGHT)
-                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z)
-                .endVertex();
+        out.vertex(matrix, (float) a.x, (float) a.y, (float) a.z)
+                .color(red, green, blue, alpha).uv(ua, va)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        out.vertex(matrix, (float) b.x, (float) b.y, (float) b.z)
+                .color(red, green, blue, alpha).uv(ub, vb)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
+        out.vertex(matrix, (float) c.x, (float) c.y, (float) c.z)
+                .color(red, green, blue, alpha).uv(uc, vc)
+                .overlayCoords(OverlayTexture.NO_OVERLAY).uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, (float) normal.x, (float) normal.y, (float) normal.z).endVertex();
     }
 
     private void rdbt$renderKingCrimsonAura(PoseStack poseStack, MultiBufferSource buffer,
@@ -511,7 +460,7 @@ new_renderer = """    @Unique
         poseStack.translate(x, y, z);
         Matrix4f matrix = poseStack.last().pose();
 
-        // Three pulsing red rings and rising energy filaments form a full-body aura.
+        // Keep the established aura: pulsing red rings and rising energy filaments.
         float[] heights = {0.10F, 0.78F, 1.55F, 1.82F};
         for (int ring = 0; ring < heights.length; ring++) {
             float radius = (ring == 0 ? 0.52F : ring == 1 ? 0.43F : 0.34F) * pulse;
@@ -559,7 +508,13 @@ replace_once(
         );
 
         buffer.endBatch();""",
-    """        rdbt$renderKingCrimsonAura(
+    """        rdbt$renderTerrainFragments(
+                $$0,
+                buffer,
+                $$3,
+                $$2
+        );
+        rdbt$renderKingCrimsonAura(
                 $$0,
                 buffer,
                 $$3,
@@ -567,7 +522,7 @@ replace_once(
         );
         buffer.endBatch();
         RenderSystem.lineWidth(1.0F);""",
-    "render the King Crimson aura"
+    "render tetrahedral Time Erase shards and preserve the King Crimson aura hook"
 )
 
 # Hide the terrain only while the ability itself is active, not during its fade-out.

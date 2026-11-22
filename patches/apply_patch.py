@@ -318,8 +318,8 @@ new_renderer = """    @Unique
     private void rdbt$crackSegment(VertexConsumer lines, Matrix4f matrix,
                                    float ax, float ay, float az,
                                    float bx, float by, float bz) {
-        lines.vertex(matrix, ax, ay, az).color(0.03F, 0.01F, 0.01F, 1.0F).endVertex();
-        lines.vertex(matrix, bx, by, bz).color(0.03F, 0.01F, 0.01F, 1.0F).endVertex();
+        lines.vertex(matrix, ax, ay, az).color(0.03F, 0.01F, 0.01F, 1.0F).normal(0.0F, 1.0F, 0.0F).endVertex();
+        lines.vertex(matrix, bx, by, bz).color(0.03F, 0.01F, 0.01F, 1.0F).normal(0.0F, 1.0F, 0.0F).endVertex();
     }
 
     private void rdbt$renderKingCrimsonAura(PoseStack poseStack, MultiBufferSource buffer,
@@ -354,8 +354,8 @@ new_renderer = """    @Unique
             float z1 = Mth.sin(angle) * radius;
             float x2 = Mth.cos(angle + 0.16F) * (radius * 0.72F);
             float z2 = Mth.sin(angle + 0.16F) * (radius * 0.72F);
-            lines.vertex(matrix, x1, 0.12F, z1).color(1.0F, 0.015F, 0.025F, 0.88F).endVertex();
-            lines.vertex(matrix, x2, 1.78F, z2).color(0.75F, 0.0F, 0.015F, 0.12F).endVertex();
+            lines.vertex(matrix, x1, 0.12F, z1).color(1.0F, 0.015F, 0.025F, 0.88F).normal(0.0F, 1.0F, 0.0F).endVertex();
+            lines.vertex(matrix, x2, 1.78F, z2).color(0.75F, 0.0F, 0.015F, 0.12F).normal(0.0F, 1.0F, 0.0F).endVertex();
         }
         poseStack.popPose();
     }
@@ -368,9 +368,9 @@ new_renderer = """    @Unique
             float a0 = (float) (Math.PI * 2.0D * i / segments) + phase;
             float a1 = (float) (Math.PI * 2.0D * (i + 1) / segments) + phase;
             lines.vertex(matrix, Mth.cos(a0) * radius, y, Mth.sin(a0) * radius)
-                    .color(1.0F, 0.015F, 0.025F, 0.78F).endVertex();
+                    .color(1.0F, 0.015F, 0.025F, 0.78F).normal(0.0F, 1.0F, 0.0F).endVertex();
             lines.vertex(matrix, Mth.cos(a1) * radius, y, Mth.sin(a1) * radius)
-                    .color(0.82F, 0.0F, 0.01F, 0.25F).endVertex();
+                    .color(0.82F, 0.0F, 0.01F, 0.25F).normal(0.0F, 1.0F, 0.0F).endVertex();
         }
     }
 

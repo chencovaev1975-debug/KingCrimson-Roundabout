@@ -30,6 +30,22 @@ jobs:
           cp ../addon/README.md README-addon.md
           python3 ../addon/patches/apply_patch.py
 
+      - name: Replace Time Erase activation sound
+        working-directory: roundabout
+        shell: bash
+        run: |
+          SOUND_FILE="common/src/main/resources/assets/roundabout/sounds/time_erase_full.ogg"
+          rm -f "$SOUND_FILE"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://www.dropbox.com/scl/fi/nsnzghhbu3hy2hux55nkx/lv_0_20261122192001.ogg?rlkey=94f2zxmf13qq6d0913fcr29ty&st=kt51qc5p&dl=1" \
+            --output "$SOUND_FILE"
+          test -s "$SOUND_FILE"
+          if [ "$(head -c 4 "$SOUND_FILE")" != "OggS" ]; then
+            echo "Downloaded activation sound is not a valid OGG file."
+            exit 1
+          fi
+          echo "Replaced the original time_erase_full.ogg with the user's OGG."
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:

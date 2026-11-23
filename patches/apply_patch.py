@@ -106,7 +106,6 @@ fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding=
 # Install the screen slash and the two player/entity render layers.
 addon_files = {
     "TimeEraseSlashRenderer.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSlashRenderer.java",
-    "TimeEraseAuraLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseAuraLayer.java",
     "TimeEraseFutureLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseFutureLayer.java",
 }
 for filename, target in addon_files.items():
@@ -142,33 +141,7 @@ texture_root = root / "common/src/main/resources/assets/roundabout/textures/misc
 write_rgba_png(texture_root / "flat_white.png", 1, 1,
                lambda x, y: (255, 255, 255, 255))
 
-def diavolo_fire_pixel(x, y):
-    import math
-    u = x / 127.0
-    rise = 1.0 - y / 127.0
-    alpha = 0
-    for index in range(9):
-        base = (index + 0.5) / 9.0
-        center = base + math.sin(rise * 6.4 + index * 1.73) * 0.026
-        center += math.sin(rise * 13.0 + index * 0.91) * 0.009
-        width = 0.027 + (1.0 - rise) * 0.018
-        distance = abs(u - center)
-        body = max(0.0, 1.0 - distance / width) ** 1.35
-        root_fade = min(1.0, rise * 5.0)
-        tip_fade = min(1.0, (1.0 - rise) * 5.0)
-        tongue = body * root_fade * tip_fade
-        alpha = max(alpha, int(238 * tongue))
 
-    # A few finer licks fill gaps without turning the plane into a solid sheet.
-    for index in range(5):
-        center = 0.10 + index * 0.20 + math.sin(rise * 9.0 + index * 2.0) * 0.024
-        distance = abs(u - center)
-        filament = max(0.0, 1.0 - distance / 0.010)
-        filament *= min(1.0, rise * 5.5) * min(1.0, (1.0 - rise) * 4.5)
-        alpha = max(alpha, int(150 * filament))
-    return 255, 255, 255, alpha
-
-write_rgba_png(texture_root / "diavolo_aura.png", 128, 128, diavolo_fire_pixel)
 
 # Start the effect on the local client's Time Erase rising edge, and let its own
 # incremental client snapshot timer advance independently of server-side world data.
@@ -269,17 +242,15 @@ def update_source_once(path, old, new, label):
         raise SystemExit(f"{label}: expected one anchor, found {count}")
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
-# Attach the fullbright future hologram to every living renderer and the aura to
-# the activating player's renderer. The normal model pose is reused, preserving
-# each entity's current walk, jump, and attack animation.
+# Attach only the red future-image layer. The activating player's flame aura is
+# intentionally not registered; StandEntity targets are filtered in its predictor.
 living_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/ZLivingEntityRenderer.java"
 update_source_once(
     living_renderer,
     "import net.hydra.jojomod.client.models.layers.FrozenLayer;",
     """import net.hydra.jojomod.client.models.layers.FrozenLayer;
-import net.hydra.jojomod.client.models.layers.TimeEraseAuraLayer;
 import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;""",
-    "import the Time Erase player aura and future render layers"
+    "import the Time Erase future render layer without the player aura"
 )
 def insert_line_after_unique(path, marker, line_to_insert, label):
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -292,8 +263,8 @@ def insert_line_after_unique(path, marker, line_to_insert, label):
 insert_line_after_unique(
     living_renderer,
     "this.addLayer(new FrozenLayer<>",
-    "        this.addLayer(new TimeEraseAuraLayer<>(this));\n        this.addLayer(new TimeEraseFutureLayer<>(this));",
-    "attach the aura and future hologram to all living renderers"
+    "        this.addLayer(new TimeEraseFutureLayer<>(this));",
+    "attach only the future hologram to living renderers"
 )
 
 update_source_once(
@@ -348,6 +319,66 @@ update_source_once(
     "return ClientNetworking.getAppropriateConfig().kingCrimsonSettings.timeEraseDuration;",
     "return 28 * 20;",
     "set Time Erase to exactly 28 seconds"
+)
+
+update_source_once(
+    powers,
+    """    public int getTimeEraseCooldown(){
+        int maxTicks = timeEraseMaxTicks();
+        int ticksEaten = maxTicks - ticksOfEraseLeft;
+        ticksEaten = Math.max(ticksEaten,0);
+
+        int cooldownOverall = ClientNetworking.getAppropriateConfig().
+                kingCrimsonSettings.timeEraseMinimumCooldown;
+        cooldownOverall += (int)(((float)ticksEaten)
+                *((ClientNetworking.getAppropriateConfig().kingCrimsonSettings.
+                additionalCooldownPerSecondsUsed2 *0.05)));
+
+        if (isBeyondRange()) {
+            cooldownOverall+=ClientNetworking.getAppropriateConfig().
+                    kingCrimsonSettings.additionalCooldownFromPlayerRunning;
+        }
+
+        return cooldownOverall;
+    }""",
+    """    public int getTimeEraseCooldown(){
+        return 30 * 20;
+    }""",
+    "set Time Erase cooldown to 30 seconds"
+)
+
+update_source_once(
+    powers,
+    """    public int getTimeEraseCooldownMax(){
+        int maxTicks = timeEraseMaxTicks();
+        int ticksEaten = maxTicks;
+        ticksEaten = Math.max(ticksEaten,0);
+
+        int cooldownOverall = ClientNetworking.getAppropriateConfig().
+                kingCrimsonSettings.timeEraseMinimumCooldown;
+        cooldownOverall += (int)(((float)ticksEaten)
+                *((ClientNetworking.getAppropriateConfig().kingCrimsonSettings.
+                additionalCooldownPerSecondsUsed2 *0.05)));
+
+        if (isBeyondRange()) {
+            cooldownOverall+=ClientNetworking.getAppropriateConfig().
+                    kingCrimsonSettings.additionalCooldownFromPlayerRunning;
+        }
+
+        return cooldownOverall;
+    }""",
+    """    public int getTimeEraseCooldownMax(){
+        return 30 * 20;
+    }""",
+    "set Time Erase maximum cooldown display to 30 seconds"
+)
+
+update_source_once(
+    powers,
+    """            int minCo = ClientNetworking.getAppropriateConfig().
+                    kingCrimsonSettings.timeEraseMinimumCooldown;""",
+    """            int minCo = 30 * 20;""",
+    "keep Time Erase cooldown at 30 seconds after switching back to the stand"
 )
 
 mod_sounds = root / "common/src/main/java/net/hydra/jojomod/sound/ModSounds.java"

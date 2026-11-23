@@ -41,10 +41,10 @@ import java.util.Random;
  */
 public final class TimeEraseFractureEffect {
     private static final int RADIUS = 30;
-    private static final int BAND_COUNT = 6;
+    private static final int BAND_COUNT = 30;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
     private static final int MAX_BLOCKS = 9000;
-    private static final int[] OBJECT_CAPS = {350, 550, 750, 950, 1150, 1350};
+    private static final int OBJECT_CAP_PER_BAND = 180;
     private static final int OBJECT_SCAN_ABOVE = 40;
     private static final int OBJECT_SCAN_BELOW = 12;
 
@@ -117,8 +117,8 @@ public final class TimeEraseFractureEffect {
             } else {
                 elapsedTicks++;
 
-                // Capture one concentric ring per tick, avoiding a single large
-                // 30-block-radius world scan on the activation frame.
+                // Capture one one-block-wide ring per tick. Thirty small scans
+                // finish before the shatter and avoid a heavy 30-block-radius frame.
                 if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
                     captureBand(capturedLevel,
                             (int) Math.floor(centerX),
@@ -207,7 +207,7 @@ public final class TimeEraseFractureEffect {
         int innerRadius = bandIndex * BAND_RADIUS;
         int outerSquared = outerRadius * outerRadius;
         int innerSquared = innerRadius * innerRadius;
-        int objectCapacity = OBJECT_CAPS[bandIndex];
+        int objectCapacity = OBJECT_CAP_PER_BAND;
 
         // Ground columns are stored separately. Surface blocks can no longer
         // consume the quota reserved for trees and other visible objects.

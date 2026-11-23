@@ -97,15 +97,18 @@ public final class TimeEraseFractureEffect {
         if (abilityActive && !previousAbilityActive) {
             begin(player, level);
         } else if (effectActive) {
-            elapsedTicks++;
-            if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
-                captureBand(capturedLevel,
-                        (int) Math.floor(centerX), (int) Math.floor(centerY),
-                        (int) Math.floor(centerZ), elapsedTicks);
-            }
-            if (elapsedTicks >= FINISH_TICK) {
+            // Keep the captured surface visible for the entire native Time Erase
+            // fade. Only the fracture and shard layers have their own short lifetime.
+            if (!ClientUtil.renderTimeErase()) {
                 effectActive = false;
                 BLOCKS.clear();
+            } else {
+                elapsedTicks++;
+                if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
+                    captureBand(capturedLevel,
+                            (int) Math.floor(centerX), (int) Math.floor(centerY),
+                            (int) Math.floor(centerZ), elapsedTicks);
+                }
             }
         }
 
@@ -210,12 +213,16 @@ public final class TimeEraseFractureEffect {
 
         View view = new View(camera);
 
-        if (elapsedTicks < SHATTER_TICK) {
-            renderIntactBlocks(poseStack, buffer, view);
-            buffer.endBatch();
+        // The top terrain layer stays present until native Time Erase ends.
+        // Cracks and chips are temporary overlays; they never remove the surface snapshot.
+        renderIntactBlocks(poseStack, buffer, view);
+        buffer.endBatch();
+
+        if (elapsedTicks < FINISH_TICK) {
             renderCracks(poseStack, view, partialTick);
-        } else {
-            renderShards(poseStack, view, partialTick);
+            if (elapsedTicks >= SHATTER_TICK) {
+                renderShards(poseStack, view, partialTick);
+            }
         }
     }
 

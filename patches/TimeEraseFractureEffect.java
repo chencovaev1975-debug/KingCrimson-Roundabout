@@ -46,6 +46,7 @@ import java.util.Random;
 public final class TimeEraseFractureEffect {
     private static final int RADIUS = 30;
     private static final int BAND_COUNT = 30;
+    private static final int CAPTURE_BANDS_PER_TICK = 2;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
     private static final int MAX_BLOCKS = 9000;
     private static final int OBJECT_CAP_PER_BAND = 180;
@@ -142,14 +143,20 @@ public final class TimeEraseFractureEffect {
             } else {
                 elapsedTicks++;
 
-                // Capture one one-block-wide ring per tick. Thirty small scans
-                // finish before the shatter and avoid a heavy 30-block-radius frame.
-                if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
-                    captureBand(capturedLevel,
-                            (int) Math.floor(centerX),
-                            (int) Math.floor(centerY),
-                            (int) Math.floor(centerZ),
-                            elapsedTicks);
+                // Scan two narrow radial bands per tick. The complete 30-block
+                // snapshot is ready before the 1.05-second violet block flash,
+                // while the work is still divided across multiple client ticks.
+                if (capturedLevel != null && elapsedTicks > 0) {
+                    int firstBand = 1 + (elapsedTicks - 1) * CAPTURE_BANDS_PER_TICK;
+                    for (int bandOffset = 0; bandOffset < CAPTURE_BANDS_PER_TICK; bandOffset++) {
+                        int bandIndex = firstBand + bandOffset;
+                        if (bandIndex >= BAND_COUNT) break;
+                        captureBand(capturedLevel,
+                                (int) Math.floor(centerX),
+                                (int) Math.floor(centerY),
+                                (int) Math.floor(centerZ),
+                                bandIndex);
+                    }
                 }
 
                 if (!rocksCreated && elapsedTicks >= SHATTER_TICK) {
@@ -217,10 +224,10 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Capture exposed block models in one five-block-wide ring. The scan extends
-     * above the ground to include trees and structures, and a few blocks below
-     * the surface to preserve exposed cliff faces. Buried underground mass is
-     * intentionally excluded.
+     * Capture exposed block models in one one-block-wide radial ring. The scan
+     * extends above the ground to include trees and structures, and a few blocks
+     * below the surface to preserve exposed cliff faces. Buried underground mass
+     * is intentionally excluded.
      */
     private static void captureBand(ClientLevel level, int cx, int cy, int cz, int bandIndex) {
         if (bandIndex < 0 || bandIndex >= BAND_COUNT || BLOCKS.size() >= MAX_BLOCKS) return;
@@ -459,9 +466,8 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Seven giant boulders, four medium chunks, six small chunks and sixteen
-     * tiny crumbs. Wide spacing is reserved for the giants so their silhouettes
-     * do not overlap into one screen-filling mass.
+     * Ten large wall plates/beams, twelve medium masonry chunks and twenty-five
+     * small sharp chips. Each size tier uses its own radial anchor band.
      */
     private static void createRocks() {
         ROCKS.clear();

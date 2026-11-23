@@ -67,6 +67,7 @@ public final class TimeEraseFractureEffect {
     // then spread across the captured ground before the rocks erupt at 2.30 seconds.
     private static final int CRACK_START_TICK = 32;
     private static final int CRACK_GROW_TICKS = 14;
+    private static final int CRACK_MESHES_PER_TICK = 260;
     private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
@@ -113,6 +114,7 @@ public final class TimeEraseFractureEffect {
     private static boolean customThemePlayed;
     private static boolean rocksCreated;
     private static boolean groundCracksCreated;
+    private static int groundCrackBuildIndex;
     private static int elapsedTicks;
     private static long effectStartNanos;
     private static ClientLevel capturedLevel;
@@ -152,6 +154,7 @@ public final class TimeEraseFractureEffect {
                 ROCKS.clear();
                 GROUND_CRACKS.clear();
                 groundCracksCreated = false;
+                groundCrackBuildIndex = 0;
                 FUTURE_PREDICTIONS.clear();
                 FUTURE_PARTICLE_TIMES.clear();
             } else {
@@ -173,9 +176,16 @@ public final class TimeEraseFractureEffect {
                     }
                 }
 
-                if (!groundCracksCreated && elapsedTicks >= CRACK_START_TICK) {
-                    createGroundCracks();
-                    groundCracksCreated = true;
+                // Prepare meshes gradually during the capture phase so the 1.60s
+                // reveal never has to build thousands of vertices in one game tick.
+                if (!groundCracksCreated && elapsedTicks > 0) {
+                    buildGroundCracksBatch(CRACK_MESHES_PER_TICK);
+                    int captureTicks = (BAND_COUNT + CAPTURE_BANDS_PER_TICK - 1)
+                            / CAPTURE_BANDS_PER_TICK;
+                    if (elapsedTicks >= captureTicks
+                            && groundCrackBuildIndex >= GROUND_ANCHORS.size()) {
+                        groundCracksCreated = true;
+                    }
                 }
 
                 if (!rocksCreated && elapsedTicks >= SHATTER_TICK) {
@@ -202,6 +212,7 @@ public final class TimeEraseFractureEffect {
         GROUND_ANCHORS.clear();
         ROCKS.clear();
         GROUND_CRACKS.clear();
+        groundCrackBuildIndex = 0;
         capturedLevel = level;
         centerX = player.getX();
         centerY = player.getY();
@@ -213,6 +224,7 @@ public final class TimeEraseFractureEffect {
         customThemePlayed = false;
         rocksCreated = false;
         groundCracksCreated = false;
+        groundCrackBuildIndex = 0;
         FUTURE_PREDICTIONS.clear();
         FUTURE_PARTICLE_TIMES.clear();
         appliedCameraShake = 0.0F;
@@ -230,12 +242,14 @@ public final class TimeEraseFractureEffect {
         GROUND_ANCHORS.clear();
         ROCKS.clear();
         GROUND_CRACKS.clear();
+        groundCrackBuildIndex = 0;
         capturedLevel = null;
         previousAbilityActive = false;
         effectActive = false;
         customThemePlayed = false;
         rocksCreated = false;
         groundCracksCreated = false;
+        groundCrackBuildIndex = 0;
         elapsedTicks = 0;
         effectStartNanos = 0L;
         appliedCameraShake = 0.0F;
@@ -453,12 +467,13 @@ public final class TimeEraseFractureEffect {
      * Shared edge ports are seeded from world coordinates, so cracks continue across
      * neighboring blocks instead of repeating a tile-shaped decal.
      */
-    private static void createGroundCracks() {
-        GROUND_CRACKS.clear();
+    private static void buildGroundCracksBatch(int maxBlocks) {
         if (capturedLevel == null || GROUND_ANCHORS.isEmpty()) return;
 
+        int endIndex = Math.min(GROUND_ANCHORS.size(), groundCrackBuildIndex + maxBlocks);
         BlockRenderDispatcher dispatcher = Minecraft.getInstance().getBlockRenderer();
-        for (BlockRecord record : GROUND_ANCHORS) {
+        for (int recordIndex = groundCrackBuildIndex; recordIndex < endIndex; recordIndex++) {
+            BlockRecord record = GROUND_ANCHORS.get(recordIndex);
             long seed = crackBlockSeed(record);
             Random random = new Random(seed);
             BakedModel model = dispatcher.getBlockModelShaper().getBlockModel(record.state);
@@ -510,7 +525,7 @@ public final class TimeEraseFractureEffect {
 
             // Add irregular side fractures to create branching Y-junctions.
             // Every branch has its own width, depth, number of bends and direction.
-            int branchCount = 1 + random.nextInt(2);
+            int branchCount = random.nextFloat() < 0.30F ? 2 : 1;
             for (int i = 0; i < branchCount && !paths.isEmpty(); i++) {
                 CrackPath parent = paths.get(random.nextInt(paths.size()));
                 if (parent.points.size() < 3) continue;
@@ -535,6 +550,7 @@ public final class TimeEraseFractureEffect {
                 GROUND_CRACKS.add(builder.build(record, sprite));
             }
         }
+        groundCrackBuildIndex = endIndex;
     }
 
     private static long crackBlockSeed(BlockRecord record) {
@@ -586,8 +602,8 @@ public final class TimeEraseFractureEffect {
                 ^ ((long) boundaryZ * 0xC2B2AE3D27D4EB4FL)
                 ^ (verticalEdge ? 0x165667B19E3779F9L : 0x85EBCA77C2B2AE63L);
         Random edgeRandom = new Random(mixCrackSeed(edgeKey));
-        int count = edgeRandom.nextFloat() < 0.82F ? 1 : 0;
-        if (edgeRandom.nextFloat() < 0.14F) count++;
+        int count = edgeRandom.nextFloat() < 0.74F ? 1 : 0;
+        if (edgeRandom.nextFloat() < 0.10F) count++;
         if (count == 2) {
             float first = 0.16F + edgeRandom.nextFloat() * 0.68F;
             float second = 0.16F + edgeRandom.nextFloat() * 0.68F;
@@ -631,7 +647,7 @@ public final class TimeEraseFractureEffect {
         if (length > 1.0E-4F) {
             float normalX = -dz / length;
             float normalZ = dx / length;
-            int bends = 2 + random.nextInt(3);
+            int bends = 1 + random.nextInt(2);
             for (int i = 1; i <= bends; i++) {
                 float t = i / (float) (bends + 1);
                 float jitter = (random.nextFloat() - 0.5F) * 0.22F;

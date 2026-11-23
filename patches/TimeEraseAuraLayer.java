@@ -20,6 +20,8 @@ import org.joml.Matrix4f;
 
 /** Pulsing crimson-magenta shell and custom rising flame billboards for the activating player. */
 public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityModel<T>> extends RenderLayer<T, M> {
+    private static final ResourceLocation WHITE_TEXTURE =
+            new ResourceLocation(Roundabout.MOD_ID, "textures/misc/flat_white.png");
     private static final ResourceLocation AURA_TEXTURE =
             new ResourceLocation(Roundabout.MOD_ID, "textures/misc/diavolo_aura.png");
     private static final int FULL_BRIGHT = LightTexture.FULL_BRIGHT;
@@ -47,7 +49,7 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
                     1.050F + pulse * 0.008F,
                     1.055F + pulse * 0.008F);
 
-            VertexConsumer shell = buffer.getBuffer(RenderType.entityTranslucentEmissive(AURA_TEXTURE));
+            VertexConsumer shell = buffer.getBuffer(RenderType.entityTranslucentEmissive(WHITE_TEXTURE));
             getParentModel().renderToBuffer(
                     poseStack, shell, FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
                     0.76F, 0.015F, 0.075F, shellAlpha

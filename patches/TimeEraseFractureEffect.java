@@ -354,7 +354,7 @@ public final class TimeEraseFractureEffect {
 
     public static void render(PoseStack poseStack, MultiBufferSource.BufferSource buffer,
                               Camera camera, float partialTick) {
-        if (!effectActive || !ClientUtil.renderTimeErase()) return;
+        if (!effectActive || !ClientUtil.isUsingTimeErase || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
         // Keep the captured scene as a short afterimage while the newly spawned

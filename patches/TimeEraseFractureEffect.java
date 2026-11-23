@@ -123,7 +123,7 @@ public final class TimeEraseFractureEffect {
         }
 
         // Do not allow the Diavolo track to outlive the Time Erase ability.
-        if (!abilityActive) {
+        if (!abilityActive && previousAbilityActive) {
             stopTheme();
         }
 

@@ -53,7 +53,7 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
         for (int plane = 0; plane < PLANES; plane++) {
             poseStack.pushPose();
             try {
-                poseStack.translate(0.0D, -0.36D, 0.0D);
+                poseStack.translate(0.0D, 0.24D, 0.0D);
                 poseStack.mulPose(Axis.YP.rotationDegrees(plane * 45.0F + age * 0.75F));
                 renderFlamePlane(poseStack.last().pose(), fire, age, pulse, plane);
             } finally {
@@ -119,7 +119,7 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
             float z = -localVZ * distance;
             poseStack.pushPose();
             try {
-                poseStack.translate(x, -0.12F - i * 0.12F, z);
+                poseStack.translate(x, 0.48F - i * 0.12F, z);
                 poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
                 Matrix4f matrix = poseStack.last().pose();
                 float halfWidth = 0.065F;

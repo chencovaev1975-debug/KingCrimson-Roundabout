@@ -63,8 +63,8 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_FADE_TICKS = 10;
     private static final int ROCK_EMERGENCE_TICKS = 7;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
-    private static final int SLASH_DRAW_TICKS = 3;
-    private static final int SLASH_FADE_TICKS = 2;
+    private static final int SLASH_DRAW_TICKS = 10;
+    private static final int SLASH_FADE_TICKS = 7;
     private static final int FUTURE_LEAD_TICKS = 25;
     private static final int BIG_ROCK_COUNT = 22;
     private static final int MEDIUM_ROCK_COUNT = 26;
@@ -88,6 +88,9 @@ public final class TimeEraseFractureEffect {
             new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
     // Generated meshes are immutable after creation and reused by seed.
     private static final Map<Long, RockMesh> ROCK_MESH_CACHE = new HashMap<>(128);
+    private static final Map<Integer, PredictionSmoother> FUTURE_PREDICTIONS = new HashMap<>(64);
+    private static final Map<Integer, Long> FUTURE_PARTICLE_TIMES = new HashMap<>(64);
+    private static final long FUTURE_PARTICLE_INTERVAL_NANOS = 240_000_000L;
 
     private static boolean previousAbilityActive;
     private static boolean effectActive;
@@ -127,6 +130,8 @@ public final class TimeEraseFractureEffect {
                 BLOCKS.clear();
                 GROUND_ANCHORS.clear();
                 ROCKS.clear();
+                FUTURE_PREDICTIONS.clear();
+                FUTURE_PARTICLE_TIMES.clear();
             } else {
                 elapsedTicks++;
 
@@ -178,6 +183,8 @@ public final class TimeEraseFractureEffect {
         effectActive = true;
         customThemePlayed = false;
         rocksCreated = false;
+        FUTURE_PREDICTIONS.clear();
+        FUTURE_PARTICLE_TIMES.clear();
         appliedCameraShake = 0.0F;
 
         captureBand(level,
@@ -199,6 +206,8 @@ public final class TimeEraseFractureEffect {
         rocksCreated = false;
         elapsedTicks = 0;
         appliedCameraShake = 0.0F;
+        FUTURE_PREDICTIONS.clear();
+        FUTURE_PARTICLE_TIMES.clear();
     }
 
     private static void stopTheme() {
@@ -396,36 +405,36 @@ public final class TimeEraseFractureEffect {
 
         // Large plates and beams occupy the outer ring and travel the farthest.
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 6.0D, 20.0D, 29.0D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 4.0D, 10.0D, 17.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
                     2.70F + random.nextFloat() * 0.50F,
-                    6.0F + random.nextFloat() * 3.0F,
+                    2.5F + random.nextFloat() * 1.5F,
                     ROCK_EMERGENCE_TICKS,
                     0);
         }
 
         // Medium broken masonry stays in the middle band.
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 3.5D, 12.0D, 22.5D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 2.6D, 5.0D, 12.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
                     1.20F + random.nextFloat() * 0.45F,
-                    3.0F + random.nextFloat() * 2.5F,
+                    1.2F + random.nextFloat() * 1.0F,
                     ROCK_EMERGENCE_TICKS,
                     1);
         }
 
         // Fine fragments remain in the inner band.
         for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.0D, 5.5D, 14.5D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.9D, 1.5D, 7.5D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
                     0.28F + random.nextFloat() * 0.24F,
-                    1.0F + random.nextFloat() * 1.5F,
+                    0.25F + random.nextFloat() * 0.75F,
                     ROCK_EMERGENCE_TICKS,
                     2);
         }
@@ -827,7 +836,76 @@ public final class TimeEraseFractureEffect {
      * remain authoritative and are never teleported or overwritten.
      */
     public static Vec3 getPredictedFuturePosition(LivingEntity target, float partialTick) {
-        return predictForward(target, partialTick, FUTURE_LEAD_TICKS);
+        if (target == null) return null;
+
+        Vec3 rawPrediction = predictForward(target, partialTick, FUTURE_LEAD_TICKS);
+        int entityId = target.getId();
+        if (rawPrediction == null) {
+            FUTURE_PREDICTIONS.remove(entityId);
+            FUTURE_PARTICLE_TIMES.remove(entityId);
+            return null;
+        }
+
+        long now = System.nanoTime();
+        PredictionSmoother smoother = FUTURE_PREDICTIONS.get(entityId);
+        if (smoother == null) {
+            smoother = new PredictionSmoother(rawPrediction, now);
+            FUTURE_PREDICTIONS.put(entityId, smoother);
+        } else {
+            long elapsedNanos = Math.max(0L, now - smoother.lastUpdateNanos);
+            double elapsedSeconds = Math.min(0.20D, elapsedNanos / 1_000_000_000.0D);
+            // 105 ms time constant removes frame-to-frame snapping without
+            // making the hologram feel sluggish when an entity changes direction.
+            double blend = 1.0D - Math.exp(-elapsedSeconds / 0.105D);
+            if (elapsedNanos > 450_000_000L) {
+                smoother.position = rawPrediction;
+            } else {
+                smoother.position = smoother.position.lerp(rawPrediction, blend);
+            }
+            smoother.lastUpdateNanos = now;
+        }
+
+        spawnFutureResidue(target, smoother.position, target.getPosition(partialTick), now);
+        return smoother.position;
+    }
+
+    /**
+     * Small red/purple motes and a soft smoke wisp leave a short residue around
+     * the future image. Emission is throttled per entity to keep particle cost low.
+     */
+    private static void spawnFutureResidue(LivingEntity target, Vec3 future,
+                                           Vec3 current, long now) {
+        int entityId = target.getId();
+        Long last = FUTURE_PARTICLE_TIMES.get(entityId);
+        if (last != null && now - last < FUTURE_PARTICLE_INTERVAL_NANOS) return;
+        FUTURE_PARTICLE_TIMES.put(entityId, now);
+
+        if (!(target.level() instanceof ClientLevel clientLevel)) return;
+        net.minecraft.util.RandomSource random = target.getRandom();
+        double height = target.getBbHeight();
+        Vec3 towardCurrent = current.subtract(future);
+        double distance = towardCurrent.length();
+        Vec3 trailDirection = distance > 1.0E-4D
+                ? towardCurrent.scale(1.0D / distance)
+                : Vec3.ZERO;
+
+        double hazeX = future.x + (random.nextDouble() - 0.5D) * 0.28D;
+        double hazeY = future.y + height * (0.48D + random.nextDouble() * 0.30D);
+        double hazeZ = future.z + (random.nextDouble() - 0.5D) * 0.28D;
+        clientLevel.addParticle(ParticleTypes.DRAGON_BREATH,
+                hazeX, hazeY, hazeZ,
+                (random.nextDouble() - 0.5D) * 0.008D, 0.010D,
+                (random.nextDouble() - 0.5D) * 0.008D);
+
+        double trailDistance = Math.min(0.85D, Math.max(0.30D, distance * 0.28D));
+        double trailX = future.x + trailDirection.x * trailDistance;
+        double trailY = future.y + height * 0.42D;
+        double trailZ = future.z + trailDirection.z * trailDistance;
+        clientLevel.addParticle(ParticleTypes.CRIMSON_SPORE,
+                trailX + (random.nextDouble() - 0.5D) * 0.22D,
+                trailY + (random.nextDouble() - 0.5D) * 0.30D,
+                trailZ + (random.nextDouble() - 0.5D) * 0.22D,
+                trailDirection.x * 0.008D, 0.006D, trailDirection.z * 0.008D);
     }
 
     /** Moves only the rendered real model a short step along the same path. */
@@ -965,6 +1043,16 @@ public final class TimeEraseFractureEffect {
             lookX = -Math.sin(yaw) * horizontal;
             lookY = -Math.sin(pitch);
             lookZ = Math.cos(yaw) * horizontal;
+        }
+    }
+
+    private static final class PredictionSmoother {
+        Vec3 position;
+        long lastUpdateNanos;
+
+        PredictionSmoother(Vec3 position, long lastUpdateNanos) {
+            this.position = position;
+            this.lastUpdateNanos = lastUpdateNanos;
         }
     }
 

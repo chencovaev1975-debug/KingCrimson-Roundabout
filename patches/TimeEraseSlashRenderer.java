@@ -37,9 +37,10 @@ public final class TimeEraseSlashRenderer {
             drawRibbon(matrix, screenWidth, screenHeight, reveal, fade,
                     5.0F, 1.0F, 1.0F, 1.0F, 0.86F);
         } finally {
+            // Leave the HUD's expected state active for the remaining GUI passes.
             RenderSystem.defaultBlendFunc();
-            RenderSystem.enableDepthTest();
-            RenderSystem.disableBlend();
+            RenderSystem.enableBlend();
+            RenderSystem.disableDepthTest();
         }
     }
 

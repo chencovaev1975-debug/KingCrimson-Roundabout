@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.hydra.jojomod.sound.ModSounds;
 import net.hydra.jojomod.entity.stand.StandEntity;
+import net.hydra.jojomod.entity.KingCrimsonCloneEntity;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -1120,6 +1121,7 @@ public final class TimeEraseFractureEffect {
                 || target == observer || !target.isAlive()
                 || target.level() != observer.level()
                 || target instanceof StandEntity
+                || (target instanceof KingCrimsonCloneEntity clone && clone.getPlayer() == observer)
                 || target instanceof AbstractFish || target instanceof WaterAnimal) {
             return null;
         }

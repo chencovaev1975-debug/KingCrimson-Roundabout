@@ -154,4 +154,68 @@ replace_once(
     "restore render pose after Time Erase camera shake"
 )
 
+
+# Add the user's second, client-local Time Erase theme as a separate sound.
+# The activation event itself remains untouched.
+def update_source_once(path, old, new, label):
+    source = path.read_text(encoding="utf-8")
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected one anchor, found {count}")
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+powers = root / "common/src/main/java/net/hydra/jojomod/stand/powers/PowersKingCrimson.java"
+update_source_once(
+    powers,
+    "return ClientNetworking.getAppropriateConfig().kingCrimsonSettings.timeEraseDuration;",
+    "return ClientNetworking.getAppropriateConfig().kingCrimsonSettings.timeEraseDuration + (23 * 20);",
+    "extend Time Erase by 23 seconds"
+)
+
+mod_sounds = root / "common/src/main/java/net/hydra/jojomod/sound/ModSounds.java"
+update_source_once(
+    mod_sounds,
+    "    public static SoundEvent TIME_ERASE_END_EVENT = SoundEvent.createVariableRangeEvent(TIME_ERASE_END_ID);",
+    """    public static SoundEvent TIME_ERASE_END_EVENT = SoundEvent.createVariableRangeEvent(TIME_ERASE_END_ID);
+    public static final String DIAVOLO_THEME = "diavolo_theme";
+    public static final ResourceLocation DIAVOLO_THEME_ID = new ResourceLocation(Roundabout.MOD_ID+":"+DIAVOLO_THEME);
+    public static SoundEvent DIAVOLO_THEME_EVENT = SoundEvent.createVariableRangeEvent(DIAVOLO_THEME_ID);""",
+    "register Diavolo theme event"
+)
+
+fabric_sounds = root / "fabric/src/main/java/net/hydra/jojomod/registry/FabricSounds.java"
+update_source_once(
+    fabric_sounds,
+    "        addSound(ModSounds.TIME_ERASE_END_ID, ModSounds.TIME_ERASE_END_EVENT);",
+    """        addSound(ModSounds.TIME_ERASE_END_ID, ModSounds.TIME_ERASE_END_EVENT);
+        addSound(ModSounds.DIAVOLO_THEME_ID, ModSounds.DIAVOLO_THEME_EVENT);""",
+    "register Diavolo theme on Fabric"
+)
+
+sounds_json = root / "common/src/main/resources/assets/roundabout/sounds.json"
+update_source_once(
+    sounds_json,
+    """  "time_erase_end": {""",
+    """  "diavolo_theme": {
+    "sounds": [
+      "roundabout:diavolo_theme"
+    ]
+  },
+  "time_erase_end": {""",
+    "add Diavolo theme sound definition"
+)
+
+# The binary is uploaded to the add-on repository at patches/assets/diavolo_theme.ogg.
+# During the interim code-only build, keep the build green and report the missing asset.
+audio_asset = Path(__file__).with_name("assets") / "diavolo_theme.ogg"
+audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
+if audio_asset.is_file():
+    audio_target.parent.mkdir(parents=True, exist_ok=True)
+    audio_target.write_bytes(audio_asset.read_bytes())
+    if not audio_target.read_bytes().startswith(b"OggS"):
+        raise SystemExit("Diavolo theme asset is not a valid Ogg container")
+    print("Installed local Diavolo theme sound asset.")
+else:
+    print("NOTE: patches/assets/diavolo_theme.ogg is not uploaded yet; sound asset copy skipped.")
+
 print("Applied: native Time Erase skybox plus local fracture wave, non-rotating stone chips, and a brief vertical shake.")

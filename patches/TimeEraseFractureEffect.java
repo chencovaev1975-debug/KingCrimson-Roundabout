@@ -122,8 +122,9 @@ public final class TimeEraseFractureEffect {
             reset();
         }
 
-        // Do not allow the Diavolo track to outlive the Time Erase ability.
-        if (!abilityActive && previousAbilityActive) {
+        // Enforce the sound lifetime directly from the current ability state.
+        // stopTheme also stops the registered event by ID, so no queued copy can continue.
+        if (!abilityActive) {
             stopTheme();
         }
 

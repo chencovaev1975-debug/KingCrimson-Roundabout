@@ -44,11 +44,11 @@ public final class TimeEraseSlashRenderer {
 
             // Soft edge halo, mid feather and a pink centre. There is no white core.
             drawBandLayer(matrix, screenWidth, screenHeight, progress, fade,
-                    116.0F, 0.10F, 1.0F, 0.08F, 0.48F);
+                    116.0F, 0.04F, 1.0F, 0.078F, 0.576F);
             drawBandLayer(matrix, screenWidth, screenHeight, progress, fade,
-                    98.0F, 0.19F, 1.0F, 0.12F, 0.60F);
+                    98.0F, 0.08F, 1.0F, 0.20F, 0.60F);
             drawBandLayer(matrix, screenWidth, screenHeight, progress, fade,
-                    BAND_HEIGHT, 0.40F, 1.0F, 0.08F, 0.42F);
+                    BAND_HEIGHT, 0.30F, 1.0F, 0.078F, 0.576F);
         } finally {
             RenderSystem.depthMask(true);
             RenderSystem.defaultBlendFunc();

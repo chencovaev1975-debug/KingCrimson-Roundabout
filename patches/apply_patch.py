@@ -75,10 +75,13 @@ renderer.write_text(sky_source[:sky_start] + sky_section + sky_source[sky_end:],
 # per-block geometry and keeps the effect independent of the camera/world mesh.
 hud = root / "common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java"
 hud_source = hud.read_text(encoding="utf-8")
-if "import net.hydra.jojomod.client.TimeEraseFractureEffect;" not in hud_source:
-    if hud_source.count("import net.hydra.jojomod.client.ClientUtil;") != 1:
+hud_import = "import net.hydra.jojomod.client.TimeEraseFractureEffect;"
+hud_client_import = "import net.hydra.jojomod.client.ClientUtil;"
+if hud_import not in hud_source:
+    if hud_source.count(hud_client_import) != 1:
         raise SystemExit("Time Erase flash import: expected one ClientUtil import")
-    hud_source = hud_source.replace("import net.hydra.jojomod.client.ClientUtil;", "import net.hydra.jojomod.client.ClientUtil;\\nimport net.hydra.jojomod.client.TimeEraseFractureEffect;", 1)
+    hud_source = hud_source.replace(hud_client_import,
+            hud_client_import + "\\n" + hud_import, 1)
 
 flash_inject = """    @Inject(method = "renderHotbar", at = @At("TAIL"))
     private void roundabout$renderTimeEraseFlash(float partialTick, GuiGraphics guiGraphics, CallbackInfo ci) {
@@ -91,10 +94,11 @@ flash_inject = """    @Inject(method = "renderHotbar", at = @At("TAIL"))
     }
 
 """
+head_marker = '    @Inject(method = "renderHotbar", at = @At(value = "HEAD"))'
 if "roundabout$renderTimeEraseFlash" not in hud_source:
-    if hud_source.count("    @Inject(method = "renderHotbar", at = @At(value = "HEAD"))") != 1:
+    if hud_source.count(head_marker) != 1:
         raise SystemExit("Time Erase flash hook: expected one renderHotbar HEAD injection")
-    hud_source = hud_source.replace("    @Inject(method = "renderHotbar", at = @At(value = "HEAD"))", flash_inject + "    @Inject(method = "renderHotbar", at = @At(value = "HEAD"))", 1)
+    hud_source = hud_source.replace(head_marker, flash_inject + head_marker, 1)
 hud.write_text(hud_source, encoding="utf-8")
 
 # Add the local-only fracture effect. The class is deliberately client-only and only

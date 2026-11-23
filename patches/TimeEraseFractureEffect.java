@@ -55,9 +55,12 @@ public final class TimeEraseFractureEffect {
     private static final int CUSTOM_THEME_TICK = 84;
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
-    private static final int BIG_ROCK_COUNT = 20;
-    private static final int MEDIUM_ROCK_COUNT = 10;
-    private static final int SMALL_ROCK_COUNT = 8;
+    private static final int GLITCH_START_TICK = 24;
+    private static final int GLITCH_DURATION_TICKS = 10;
+    private static final int BIG_ROCK_COUNT = 7;
+    private static final int MEDIUM_ROCK_COUNT = 4;
+    private static final int SMALL_ROCK_COUNT = 6;
+    private static final int CRUMB_ROCK_COUNT = 16;
 
     private static final int[][] NEIGHBORS = {
             {1, 0, 0}, {-1, 0, 0},
@@ -75,7 +78,7 @@ public final class TimeEraseFractureEffect {
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
-            new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
+            new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT + CRUMB_ROCK_COUNT);
 
     private static boolean previousAbilityActive;
     private static boolean effectActive;
@@ -322,6 +325,7 @@ public final class TimeEraseFractureEffect {
         View view = new View(camera);
         if (elapsedTicks < SHATTER_TICK) {
             renderCapturedScene(poseStack, buffer, view);
+            renderPurpleGlitch(poseStack, buffer, view, partialTick);
             buffer.endBatch();
         } else if (!ROCKS.isEmpty()) {
             renderRocks(poseStack, buffer, view, partialTick);
@@ -354,8 +358,103 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Creates a ground-launched burst spread across a broad arc around the player:
-     * twenty giant boulders, ten medium pieces and eight smaller chips.
+     * At 1.20 seconds a faint violet scan travels diagonally through the captured
+     * block scene. It overlays only a narrow band of real block positions and
+     * vanishes quickly instead of tinting the whole screen.
+     */
+    private static void renderPurpleGlitch(PoseStack poseStack,
+                                           MultiBufferSource.BufferSource buffer,
+                                           View camera, float partialTick) {
+        float age = elapsedTicks + partialTick - GLITCH_START_TICK;
+        if (age < 0.0F || age >= GLITCH_DURATION_TICKS) return;
+
+        float progress = age / (float) GLITCH_DURATION_TICKS;
+        double sweepRange = RADIUS * 1.41421356237D + 3.0D;
+        double sweepCenter = -sweepRange + sweepRange * 2.0D * progress;
+        float finalFade = progress < 0.86F
+                ? 1.0F
+                : Math.max(0.0F, (1.0F - progress) / 0.14F);
+
+        Minecraft minecraft = Minecraft.getInstance();
+        TextureAtlasSprite sprite = minecraft.getBlockRenderer()
+                .getBlockModelShaper()
+                .getBlockModel(Blocks.STONE.defaultBlockState())
+                .getParticleIcon();
+        VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
+
+        for (BlockRecord record : BLOCKS) {
+            if (!isInView(record.x + 0.5D, record.y + 0.5D, record.z + 0.5D, camera)) continue;
+
+            double sweepCoordinate = (record.x + 0.5D - centerX) * 0.70710678118D
+                    + (record.z + 0.5D - centerZ) * 0.70710678118D;
+            double distance = Math.abs(sweepCoordinate - sweepCenter);
+            double irregularEdge = ((record.x * 31 + record.z * 17) & 3) * 0.28D;
+            double halfWidth = 6.0D + irregularEdge;
+            if (distance > halfWidth) continue;
+
+            float edgeFactor = 1.0F - (float) (distance / halfWidth);
+            int alpha = (int) (30.0F * (0.72F + edgeFactor * 0.28F) * finalFade);
+            if (alpha <= 0) continue;
+
+            poseStack.pushPose();
+            poseStack.translate(
+                    record.x - camera.x - 0.004D,
+                    record.y - camera.y - 0.004D,
+                    record.z - camera.z - 0.004D
+            );
+
+            float x0 = -0.004F, y0 = -0.004F, z0 = -0.004F;
+            float x1 = 1.004F, y1 = 1.004F, z1 = 1.004F;
+
+            emitPurpleGlitchQuad(consumer, poseStack, sprite, alpha,
+                    x0, y0, z0,  x0, y1, z0,  x1, y1, z0,  x1, y0, z0,  0.0F, 0.0F, -1.0F);
+            emitPurpleGlitchQuad(consumer, poseStack, sprite, alpha,
+                    x0, y0, z1,  x1, y0, z1,  x1, y1, z1,  x0, y1, z1,  0.0F, 0.0F, 1.0F);
+            emitPurpleGlitchQuad(consumer, poseStack, sprite, alpha,
+                    x0, y0, z0,  x0, y0, z1,  x0, y1, z1,  x0, y1, z0,  -1.0F, 0.0F, 0.0F);
+            emitPurpleGlitchQuad(consumer, poseStack, sprite, alpha,
+                    x1, y0, z0,  x1, y1, z0,  x1, y1, z1,  x1, y0, z1,  1.0F, 0.0F, 0.0F);
+            emitPurpleGlitchQuad(consumer, poseStack, sprite, alpha,
+                    x0, y0, z0,  x1, y0, z0,  x1, y0, z1,  x0, y0, z1,  0.0F, -1.0F, 0.0F);
+            emitPurpleGlitchQuad(consumer, poseStack, sprite, alpha,
+                    x0, y1, z0,  x0, y1, z1,  x1, y1, z1,  x1, y1, z0,  0.0F, 1.0F, 0.0F);
+
+            poseStack.popPose();
+        }
+    }
+
+    private static void emitPurpleGlitchQuad(VertexConsumer consumer, PoseStack poseStack,
+                                             TextureAtlasSprite sprite, int alpha,
+                                             float ax, float ay, float az,
+                                             float bx, float by, float bz,
+                                             float cx, float cy, float cz,
+                                             float dx, float dy, float dz,
+                                             float nx, float ny, float nz) {
+        Matrix4f matrix = poseStack.last().pose();
+        org.joml.Matrix3f normal = poseStack.last().normal();
+        float u0 = sprite.getU(1.0F);
+        float u1 = sprite.getU(15.0F);
+        float v0 = sprite.getV(1.0F);
+        float v1 = sprite.getV(15.0F);
+
+        consumer.vertex(matrix, ax, ay, az).color(150, 55, 255, alpha)
+                .uv(u0, v0).overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT).normal(normal, nx, ny, nz).endVertex();
+        consumer.vertex(matrix, bx, by, bz).color(150, 55, 255, alpha)
+                .uv(u0, v1).overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT).normal(normal, nx, ny, nz).endVertex();
+        consumer.vertex(matrix, cx, cy, cz).color(150, 55, 255, alpha)
+                .uv(u1, v1).overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT).normal(normal, nx, ny, nz).endVertex();
+        consumer.vertex(matrix, dx, dy, dz).color(150, 55, 255, alpha)
+                .uv(u1, v0).overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT).normal(normal, nx, ny, nz).endVertex();
+    }
+
+    /**
+     * Seven giant boulders, four medium chunks, six small chunks and sixteen
+     * tiny crumbs. Wide spacing is reserved for the giants so their silhouettes
+     * do not overlap into one screen-filling mass.
      */
     private static void createRocks() {
         ROCKS.clear();
@@ -367,39 +466,47 @@ public final class TimeEraseFractureEffect {
                         ^ 0x4B43524F434BL
         );
         List<BlockRecord> usedAnchors = new ArrayList<>(
-                BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT
+                BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT + CRUMB_ROCK_COUNT
         );
 
-        // The large fragments are deliberately much larger than the previous
-        // "big" meshes: roughly 7-9 blocks tall, with a broad broken-rock silhouette.
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 7.0D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 8.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    4.2F + random.nextFloat() * 1.4F,
-                    0.010F + random.nextFloat() * 0.018F,
+                    3.15F + random.nextFloat() * 0.35F,
+                    0.010F + random.nextFloat() * 0.012F,
                     0.075F + random.nextFloat() * 0.025F);
         }
 
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 3.4D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 4.2D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    1.9F + random.nextFloat() * 0.6F,
-                    0.015F + random.nextFloat() * 0.020F,
+                    1.55F + random.nextFloat() * 0.35F,
+                    0.016F + random.nextFloat() * 0.016F,
                     0.085F + random.nextFloat() * 0.025F);
         }
 
         for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.7D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 2.2D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    1.0F + random.nextFloat() * 0.4F,
-                    0.020F + random.nextFloat() * 0.025F,
-                    0.095F + random.nextFloat() * 0.030F);
+                    0.78F + random.nextFloat() * 0.20F,
+                    0.024F + random.nextFloat() * 0.022F,
+                    0.095F + random.nextFloat() * 0.025F);
+        }
+
+        for (int i = 0; i < CRUMB_ROCK_COUNT; i++) {
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.75D);
+            if (anchor == null) break;
+            usedAnchors.add(anchor);
+            addRock(anchor, random,
+                    0.18F + random.nextFloat() * 0.13F,
+                    0.035F + random.nextFloat() * 0.030F,
+                    0.12F + random.nextFloat() * 0.045F);
         }
     }
 
@@ -506,13 +613,12 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Builds a different jagged silhouette for every fragment. Each rock gets
-     * its own ring count, proportions, offsets, vertex radii and face diagonals.
-     * The deliberately uneven rings create broken angular stone, not a sphere,
-     * regular cylinder, cube or repeated diamond.
+     * Every fragment receives a bounded, irregular low-poly mesh. Its ring
+     * radii are deliberately kept below one local block unit so scaling a
+     * giant rock cannot create screen-wide spikes.
      */
     private static RockMesh createRockMesh(Random random) {
-        final int segments = 6 + random.nextInt(5);
+        final int segments = 5 + random.nextInt(4);
         final int upperRing = 0;
         final int middleRing = segments;
         final int lowerRing = segments * 2;
@@ -520,83 +626,85 @@ public final class TimeEraseFractureEffect {
         final int bottomTip = topTip + 1;
         float[][] vertices = new float[segments * 3 + 2][3];
 
-        // Independent silhouettes: broad slabs, leaning chunks, tall shards and
-        // compact broken blocks. Every rock also receives independent vertex noise.
-        float shapeX = 0.72F + random.nextFloat() * 0.70F;
-        float shapeY = 0.78F + random.nextFloat() * 0.72F;
-        float shapeZ = 0.72F + random.nextFloat() * 0.70F;
-        int shapeType = random.nextInt(5);
+        float shapeX = 0.68F + random.nextFloat() * 0.24F;
+        float shapeY = 0.76F + random.nextFloat() * 0.34F;
+        float shapeZ = 0.68F + random.nextFloat() * 0.24F;
+        int shapeType = random.nextInt(6);
         if (shapeType == 0) {
-            shapeY *= 1.28F;
-            shapeX *= 0.82F;
+            shapeY *= 1.16F;
+            shapeX *= 0.84F;
+            shapeZ *= 0.90F;
         } else if (shapeType == 1) {
-            shapeX *= 1.30F;
+            shapeX *= 1.10F;
             shapeZ *= 0.76F;
-            shapeY *= 0.82F;
+            shapeY *= 0.88F;
         } else if (shapeType == 2) {
-            shapeZ *= 1.32F;
-            shapeX *= 0.78F;
+            shapeZ *= 1.10F;
+            shapeX *= 0.76F;
+            shapeY *= 0.90F;
         } else if (shapeType == 3) {
             shapeY *= 0.70F;
-            shapeX *= 1.16F;
-            shapeZ *= 1.12F;
+            shapeX *= 1.04F;
+            shapeZ *= 1.04F;
+        } else if (shapeType == 4) {
+            shapeX *= 0.86F;
+            shapeZ *= 0.90F;
+            shapeY *= 1.04F;
         }
 
         float angleOffset = random.nextFloat() * (float) (Math.PI * 2.0D);
         float angleStep = (float) (Math.PI * 2.0D) / segments;
-        float upperShiftX = (random.nextFloat() - 0.5F) * 0.34F;
-        float upperShiftZ = (random.nextFloat() - 0.5F) * 0.34F;
-        float lowerShiftX = (random.nextFloat() - 0.5F) * 0.42F;
-        float lowerShiftZ = (random.nextFloat() - 0.5F) * 0.42F;
+        float upperShiftX = (random.nextFloat() - 0.5F) * 0.22F;
+        float upperShiftZ = (random.nextFloat() - 0.5F) * 0.22F;
+        float lowerShiftX = (random.nextFloat() - 0.5F) * 0.28F;
+        float lowerShiftZ = (random.nextFloat() - 0.5F) * 0.28F;
 
         for (int i = 0; i < segments; i++) {
             float baseAngle = angleOffset + i * angleStep
                     + (random.nextFloat() - 0.5F) * angleStep * 0.42F;
-            float upperAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.30F;
-            float middleAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.46F;
-            float lowerAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.38F;
+            float upperAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.34F;
+            float middleAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.48F;
+            float lowerAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.40F;
 
-            float upperRadiusX = (0.34F + random.nextFloat() * 0.72F) * shapeX;
-            float upperRadiusZ = (0.32F + random.nextFloat() * 0.74F) * shapeZ;
+            float upperRadiusX = (0.22F + random.nextFloat() * 0.43F) * shapeX;
+            float upperRadiusZ = (0.22F + random.nextFloat() * 0.43F) * shapeZ;
             vertices[upperRing + i] = new float[] {
                     (float) Math.cos(upperAngle) * upperRadiusX + upperShiftX,
-                    (0.12F + random.nextFloat() * 0.54F) * shapeY,
+                    (0.12F + random.nextFloat() * 0.52F) * shapeY,
                     (float) Math.sin(upperAngle) * upperRadiusZ + upperShiftZ
             };
 
-            float middleRadiusX = (0.38F + random.nextFloat() * 0.78F) * shapeX;
-            float middleRadiusZ = (0.35F + random.nextFloat() * 0.78F) * shapeZ;
+            float middleRadiusX = (0.30F + random.nextFloat() * 0.36F) * shapeX;
+            float middleRadiusZ = (0.30F + random.nextFloat() * 0.36F) * shapeZ;
             vertices[middleRing + i] = new float[] {
                     (float) Math.cos(middleAngle) * middleRadiusX
-                            + (random.nextFloat() - 0.5F) * 0.20F,
-                    (random.nextFloat() - 0.5F) * 0.52F * shapeY,
+                            + (random.nextFloat() - 0.5F) * 0.16F,
+                    (random.nextFloat() - 0.5F) * 0.50F * shapeY,
                     (float) Math.sin(middleAngle) * middleRadiusZ
-                            + (random.nextFloat() - 0.5F) * 0.20F
+                            + (random.nextFloat() - 0.5F) * 0.16F
             };
 
-            float lowerRadiusX = (0.30F + random.nextFloat() * 0.72F) * shapeX;
-            float lowerRadiusZ = (0.29F + random.nextFloat() * 0.74F) * shapeZ;
+            float lowerRadiusX = (0.20F + random.nextFloat() * 0.43F) * shapeX;
+            float lowerRadiusZ = (0.20F + random.nextFloat() * 0.43F) * shapeZ;
             vertices[lowerRing + i] = new float[] {
                     (float) Math.cos(lowerAngle) * lowerRadiusX + lowerShiftX,
-                    -(0.14F + random.nextFloat() * 0.52F) * shapeY,
+                    -(0.14F + random.nextFloat() * 0.50F) * shapeY,
                     (float) Math.sin(lowerAngle) * lowerRadiusZ + lowerShiftZ
             };
         }
 
-        // Off-centre cap vertices prevent the top and bottom from converging
-        // into a symmetrical pointed diamond.
+        // Broad, offset caps keep the pieces chipped rather than pointed.
         vertices[topTip] = new float[] {
-                (random.nextFloat() - 0.5F) * 0.72F * shapeX + upperShiftX,
-                (0.62F + random.nextFloat() * 0.34F) * shapeY,
-                (random.nextFloat() - 0.5F) * 0.72F * shapeZ + upperShiftZ
+                (random.nextFloat() - 0.5F) * 0.42F * shapeX + upperShiftX,
+                (0.62F + random.nextFloat() * 0.28F) * shapeY,
+                (random.nextFloat() - 0.5F) * 0.42F * shapeZ + upperShiftZ
         };
         vertices[bottomTip] = new float[] {
-                (random.nextFloat() - 0.5F) * 0.82F * shapeX + lowerShiftX,
-                -(0.60F + random.nextFloat() * 0.34F) * shapeY,
-                (random.nextFloat() - 0.5F) * 0.82F * shapeZ + lowerShiftZ
+                (random.nextFloat() - 0.5F) * 0.46F * shapeX + lowerShiftX,
+                -(0.60F + random.nextFloat() * 0.28F) * shapeY,
+                (random.nextFloat() - 0.5F) * 0.46F * shapeZ + lowerShiftZ
         };
 
-        // Triangulate each uneven side with independently selected diagonals.
         int[][] faces = new int[segments * 6][3];
         int face = 0;
         for (int i = 0; i < segments; i++) {

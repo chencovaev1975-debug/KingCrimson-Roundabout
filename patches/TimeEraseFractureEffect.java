@@ -23,8 +23,8 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.WaterAnimal;
 import net.minecraft.world.entity.animal.AbstractFish;
+import net.minecraft.world.entity.animal.WaterAnimal;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -66,9 +66,9 @@ public final class TimeEraseFractureEffect {
     private static final int SLASH_DRAW_TICKS = 3;
     private static final int SLASH_FADE_TICKS = 2;
     private static final int FUTURE_LEAD_TICKS = 25;
-    private static final int BIG_ROCK_COUNT = 22;
-    private static final int MEDIUM_ROCK_COUNT = 26;
-    private static final int SMALL_ROCK_COUNT = 52;
+    private static final int BIG_ROCK_COUNT = 20;
+    private static final int MEDIUM_ROCK_COUNT = 24;
+    private static final int SMALL_ROCK_COUNT = 50;
 
     private static final int[][] NEIGHBORS = {
             {1, 0, 0}, {-1, 0, 0},
@@ -381,8 +381,8 @@ remove old glitch quad data    private static final List<BlockRecord> BLOCKS = n
     }
 
     /**
-     * Twenty-two large wall plates/beams, twenty-six medium masonry chunks and
-     * fifty-two small sharp chips. Existing size and motion profiles are unchanged.
+     * Twenty large wall plates/beams, twenty-four medium masonry chunks and
+     * fifty small sharp chips. Existing size and motion profiles are unchanged.
      */
     private static void createRocks() {
         ROCKS.clear();
@@ -830,6 +830,16 @@ remove old glitch quad data    private static final List<BlockRecord> BLOCKS = n
      * remain authoritative and are never teleported or overwritten.
      */
     public static Vec3 getPredictedFuturePosition(LivingEntity target, float partialTick) {
+        return predictForward(target, partialTick, FUTURE_LEAD_TICKS);
+    }
+
+    /** Moves only the rendered real model a short step along the same path. */
+    public static Vec3 getVisualBodyOffset(LivingEntity target, float partialTick) {
+        Vec3 future = predictForward(target, partialTick, 5);
+        return future == null ? null : future.subtract(target.getPosition(partialTick));
+    }
+
+    private static Vec3 predictForward(LivingEntity target, float partialTick, int leadTicks) {
         Minecraft minecraft = Minecraft.getInstance();
         LocalPlayer observer = minecraft.player;
         if (!ClientUtil.isUsingTimeErase || observer == null || target == null
@@ -864,7 +874,7 @@ remove old glitch quad data    private static final List<BlockRecord> BLOCKS = n
         }
 
         double leadDistance = speed > 0.015D
-                ? Math.max(0.75D, Math.min(5.5D, speed * FUTURE_LEAD_TICKS))
+                ? Math.max(0.20D, Math.min(5.5D, speed * leadTicks))
                 : 1.10D;
         Vec3 predicted = origin.add(direction.scale(leadDistance));
 
@@ -878,7 +888,7 @@ remove old glitch quad data    private static final List<BlockRecord> BLOCKS = n
                 predicted = new Vec3(predicted.x, groundY, predicted.z);
             }
         } else {
-            double verticalLead = Math.max(-2.0D, Math.min(2.5D, movement.y * FUTURE_LEAD_TICKS));
+            double verticalLead = Math.max(-2.0D, Math.min(2.5D, movement.y * leadTicks));
             predicted = new Vec3(predicted.x, origin.y + verticalLead, predicted.z);
         }
 

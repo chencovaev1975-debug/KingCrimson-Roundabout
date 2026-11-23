@@ -419,8 +419,8 @@ public final class TimeEraseFractureEffect {
         float cy = record.y + 0.5F + ty;
         float cz = record.z + 0.5F + tz;
 
-        float[] back = new float[n * 3];
-        float[] front = new float[n * 3];
+        float[] back = shard.backScratch;
+        float[] front = shard.frontScratch;
         for (int i = 0; i < n; i++) {
             int base = i * 6;
             float backX = vertices[base] - 0.5F;
@@ -868,6 +868,9 @@ public final class TimeEraseFractureEffect {
         final float velocityX, velocityY, velocityZ;
         final float darkness;
         final float normalX, normalY, normalZ;
+        // Reused render buffers avoid allocating two arrays for every chip every frame.
+        final float[] backScratch;
+        final float[] frontScratch;
 
         Shard(float[] vertices, int vertexCount, float velocityX, float velocityY,
               float velocityZ, float darkness, float normalX, float normalY, float normalZ) {
@@ -880,6 +883,8 @@ public final class TimeEraseFractureEffect {
             this.normalX = normalX;
             this.normalY = normalY;
             this.normalZ = normalZ;
+            this.backScratch = new float[vertexCount * 3];
+            this.frontScratch = new float[vertexCount * 3];
         }
     }
 

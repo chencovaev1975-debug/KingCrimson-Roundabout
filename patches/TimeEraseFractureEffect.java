@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.hydra.jojomod.sound.ModSounds;
+import net.hydra.jojomod.entity.stand.StandEntity;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -62,9 +63,8 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
     private static final int ROCK_EMERGENCE_TICKS = 7;
-    // Keep the captured scene visible while the first fragments emerge, so the cut
-    // never leaves a half-second empty gap before the debris becomes visible.
-    private static final int POST_SHATTER_SCENE_HOLD_TICKS = 10;
+    // Dissolve the captured terrain in the same short burst as the rocks launch.
+    private static final int GROUND_DISSOLVE_TICKS = 4;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
     private static final double SLASH_DELAY_SECONDS = 1.08D;
     private static final double SLASH_TRAVEL_SECONDS = 0.16D;
@@ -358,25 +358,45 @@ public final class TimeEraseFractureEffect {
         if (!effectActive || !ClientUtil.isUsingTimeErase || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-        // Keep the captured scene as a short afterimage while the newly spawned
-        // rocks rise through the ground. At ten ticks (0.5 seconds), the fragments
-        // are already fully emerged and the old scene can disappear without a void.
-        if (elapsedTicks < SHATTER_TICK + POST_SHATTER_SCENE_HOLD_TICKS) {
-            renderCapturedScene(poseStack, buffer, view);
+        if (elapsedTicks < SHATTER_TICK) {
+            renderCapturedScene(poseStack, buffer, view, 0.0F);
             buffer.endBatch();
-        }
-        if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
-            renderRocks(poseStack, buffer, view, partialTick);
+        } else {
+            // The ground begins disintegrating on the exact tick that the rocks
+            // launch. A four-tick dissolve is quick, but lets the rising chunks
+            // become visible through the fading terrain instead of leaving a void.
+            float dissolveProgress = Math.max(0.0F, Math.min(1.0F,
+                    (elapsedTicks + partialTick - SHATTER_TICK) / (float) GROUND_DISSOLVE_TICKS));
+            if (dissolveProgress < 1.0F) {
+                renderCapturedScene(poseStack, buffer, view, dissolveProgress);
+                buffer.endBatch();
+            }
+            if (!ROCKS.isEmpty()) {
+                renderRocks(poseStack, buffer, view, partialTick);
+            }
         }
     }
 
+    /**
+     * Stable per-block ordering makes the captured terrain break apart in a
+     * spatially distributed dissolve rather than vanishing as one solid slab.
+     */
+    private static float getDissolveOrder(BlockRecord record) {
+        int hash = record.x * 73_428_767 ^ record.y * 912_931 ^ record.z * 438_289;
+        hash = (hash ^ (hash >>> 16)) * 0x45d9f3b;
+        hash = (hash ^ (hash >>> 16)) * 0x45d9f3b;
+        hash ^= hash >>> 16;
+        return (hash & 0x7fffffff) / (float) Integer.MAX_VALUE;
+    }
+
     private static void renderCapturedScene(PoseStack poseStack, MultiBufferSource buffer,
-                                            View camera) {
+                                            View camera, float dissolveProgress) {
         Minecraft minecraft = Minecraft.getInstance();
         BlockRenderDispatcher dispatcher = minecraft.getBlockRenderer();
 
         for (BlockRecord record : BLOCKS) {
             if (!isInView(record.x + 0.5D, record.y + 0.5D, record.z + 0.5D, camera)) continue;
+            if (getDissolveOrder(record) < dissolveProgress) continue;
 
             poseStack.pushPose();
             try {
@@ -461,6 +481,9 @@ public final class TimeEraseFractureEffect {
                     ROCK_EMERGENCE_TICKS,
                     2);
         }
+
+        // A restrained burst of real block fragments accompanies the terrain dissolve.
+        spawnTerrainDissolveParticles(random);
     }
 
     /**
@@ -635,6 +658,42 @@ public final class TimeEraseFractureEffect {
                 mesh
         ));
         spawnRockParticles(anchor, random, scale);
+    }
+
+    /**
+     * Emit a small, evenly distributed burst of block-colored dust across the
+     * captured surface. This makes the fast terrain dissolve readable without
+     * flooding the client with thousands of particles.
+     */
+    private static void spawnTerrainDissolveParticles(Random random) {
+        if (capturedLevel == null || GROUND_ANCHORS.isEmpty()) return;
+
+        int available = GROUND_ANCHORS.size();
+        int count = Math.min(120, available);
+        int start = random.nextInt(available);
+
+        for (int i = 0; i < count; i++) {
+            int index = (start + (int) ((long) i * available / count)) % available;
+            BlockRecord anchor = GROUND_ANCHORS.get(index);
+            double px = anchor.x + 0.12D + random.nextDouble() * 0.76D;
+            double py = anchor.y + 0.10D + random.nextDouble() * 0.55D;
+            double pz = anchor.z + 0.12D + random.nextDouble() * 0.76D;
+
+            double dx = px - centerX;
+            double dz = pz - centerZ;
+            double distance = Math.sqrt(dx * dx + dz * dz);
+            double outwardSpeed = 0.025D + random.nextDouble() * 0.085D;
+            double vx = (distance > 1.0E-4D ? dx / distance * outwardSpeed : 0.0D)
+                    + (random.nextDouble() - 0.5D) * 0.045D;
+            double vz = (distance > 1.0E-4D ? dz / distance * outwardSpeed : 0.0D)
+                    + (random.nextDouble() - 0.5D) * 0.045D;
+            double vy = 0.035D + random.nextDouble() * 0.13D;
+
+            capturedLevel.addParticle(
+                    new BlockParticleOption(ParticleTypes.BLOCK, anchor.state),
+                    px, py, pz, vx, vy, vz
+            );
+        }
     }
 
     private static void spawnRockParticles(BlockRecord anchor, Random random, float scale) {
@@ -1060,6 +1119,7 @@ public final class TimeEraseFractureEffect {
         if (!ClientUtil.isUsingTimeErase || observer == null || target == null
                 || target == observer || !target.isAlive()
                 || target.level() != observer.level()
+                || target instanceof StandEntity
                 || target instanceof AbstractFish || target instanceof WaterAnimal) {
             return null;
         }

@@ -8,17 +8,19 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.tags.BlockTags;
-import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
@@ -29,69 +31,59 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Client-only Time Erase surface pass.
+ * Client-only Time Erase scene snapshot.
  *
- * Only the visible top terrain within a 12-block radius is captured.
- * Before the break, the captured surface and a real alpha crack texture are shown.
- * At the break, the surface disappears and only thirteen large, textured rock
- * clusters remain. No world blocks or server-side state are modified.
+ * The visible block shell (terrain, trees, leaves and other block models) is
+ * captured in a bounded 20-block radius. It is never changed on the server.
+ * At the shatter moment the captured scene is hidden and angular stone meshes
+ * burst outward. Each mesh lives for one second and then vanishes.
  */
 public final class TimeEraseFractureEffect {
-    private static final int RADIUS = 12;
-    private static final int BAND_COUNT = 3;
+    private static final int RADIUS = 20;
+    private static final int BAND_COUNT = 4;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
-    private static final int MAX_BLOCKS = 500;
-    private static final int[] BAND_CAPS = {60, 170, 270};
+    private static final int MAX_BLOCKS = 1600;
+    private static final int[] BAND_CAPS = {130, 300, 470, 700};
+    private static final int OBJECT_SCAN_ABOVE = 32;
+    private static final int OBJECT_SCAN_BELOW = 4;
 
-    private static final int CRACKS_REACH_TICK = 34;
-    private static final int SHATTER_TICK = 46; // 2.30 seconds
+    private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;
-    private static final int CUSTOM_THEME_TICK = 84; // 4.20 seconds
-    private static final int BOULDER_COUNT = 13;
+    private static final int CUSTOM_THEME_TICK = 84;
+    private static final int ROCK_LIFETIME_TICKS = 20;
+    private static final int BIG_ROCK_COUNT = 13;
+    private static final int MEDIUM_ROCK_COUNT = 4;
+    private static final int SMALL_ROCK_COUNT = 4;
 
-    private static final ResourceLocation CRACK_TEXTURE =
-            new ResourceLocation("roundabout", "textures/misc/time_erase_cracks.png");
-    private static final RenderType CRACK_RENDER_TYPE =
-            RenderType.entityTranslucent(CRACK_TEXTURE);
-    private static final float[][] TEXTURE_UV = {
-            {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}
+    private static final int[][] NEIGHBORS = {
+            {1, 0, 0}, {-1, 0, 0},
+            {0, 1, 0}, {0, -1, 0},
+            {0, 0, 1}, {0, 0, -1}
     };
 
-    // Face order: UP, DOWN, NORTH, SOUTH, WEST, EAST. DOWN is never captured.
-    private static final int[] DX = {0, 0, 0, 0, -1, 1};
-    private static final int[] DZ = {0, 0, -1, 1, 0, 0};
-
-    private static final float[][] NORMAL = {
-            {0, 1, 0}, {0, -1, 0}, {0, 0, -1},
-            {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}
+    private static final float[][] TRIANGLE_UV = {
+            {0.08F, 0.08F}, {0.92F, 0.08F}, {0.50F, 0.92F}
     };
-    private static final float[][] U_AXIS = {
-            {1, 0, 0}, {1, 0, 0}, {1, 0, 0},
-            {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}
-    };
-    private static final float[][] V_AXIS = {
-            {0, 0, -1}, {0, 0, 1}, {0, 1, 0},
-            {0, 1, 0}, {0, 1, 0}, {0, 1, 0}
-    };
-    private static final float[][] FACE_ORIGIN = {
-            {0.5F, 1.0F, 0.5F}, {0.5F, 0.0F, 0.5F},
-            {0.5F, 0.5F, 0.0F}, {0.5F, 0.5F, 1.0F},
-            {0.0F, 0.5F, 0.5F}, {1.0F, 0.5F, 0.5F}
-    };
+    private static final RenderType ROCK_RENDER_TYPE =
+            RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
 
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
-    private static final List<Boulder> BOULDERS = new ArrayList<>(BOULDER_COUNT);
+    private static final List<Rock> ROCKS =
+            new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
 
     private static boolean previousAbilityActive;
     private static boolean effectActive;
     private static boolean customThemePlayed;
-    private static boolean bouldersCreated;
+    private static boolean rocksCreated;
     private static int elapsedTicks;
     private static ClientLevel capturedLevel;
     private static double centerX;
     private static double centerY;
     private static double centerZ;
+    private static double forwardX;
+    private static double forwardZ;
     private static float appliedCameraShake;
+    private static SimpleSoundInstance themeInstance;
 
     private TimeEraseFractureEffect() {}
 
@@ -106,16 +98,23 @@ public final class TimeEraseFractureEffect {
             reset();
         }
 
+        if (!abilityActive && previousAbilityActive) {
+            stopTheme();
+        }
+
         if (abilityActive && !previousAbilityActive) {
             begin(player, level);
         } else if (effectActive) {
             if (!ClientUtil.renderTimeErase()) {
+                stopTheme();
                 effectActive = false;
                 BLOCKS.clear();
-                BOULDERS.clear();
+                ROCKS.clear();
             } else {
                 elapsedTicks++;
 
+                // Capture one concentric ring per tick, avoiding a single large
+                // 20-block-radius world scan on the activation frame.
                 if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
                     captureBand(capturedLevel,
                             (int) Math.floor(centerX),
@@ -124,15 +123,16 @@ public final class TimeEraseFractureEffect {
                             elapsedTicks);
                 }
 
-                if (!bouldersCreated && elapsedTicks >= SHATTER_TICK) {
-                    createBoulders();
-                    bouldersCreated = true;
+                if (!rocksCreated && elapsedTicks >= SHATTER_TICK) {
+                    createRocks();
+                    rocksCreated = true;
                 }
 
-                if (!customThemePlayed && elapsedTicks >= CUSTOM_THEME_TICK) {
-                    Minecraft.getInstance().getSoundManager().play(
-                            SimpleSoundInstance.forUI(ModSounds.DIAVOLO_THEME_EVENT, 1.0F)
-                    );
+                // The theme is local to the activating client and cannot start
+                // during the post-ability visual fade.
+                if (abilityActive && !customThemePlayed && elapsedTicks >= CUSTOM_THEME_TICK) {
+                    themeInstance = SimpleSoundInstance.forUI(ModSounds.DIAVOLO_THEME_EVENT, 1.0F);
+                    Minecraft.getInstance().getSoundManager().play(themeInstance);
                     customThemePlayed = true;
                 }
             }
@@ -142,16 +142,23 @@ public final class TimeEraseFractureEffect {
     }
 
     private static void begin(LocalPlayer player, ClientLevel level) {
+        stopTheme();
         BLOCKS.clear();
-        BOULDERS.clear();
+        ROCKS.clear();
         capturedLevel = level;
         centerX = player.getX();
         centerY = player.getY();
         centerZ = player.getZ();
+
+        float yaw = player.getYRot();
+        double yawRadians = Math.toRadians(yaw);
+        forwardX = -Math.sin(yawRadians);
+        forwardZ = Math.cos(yawRadians);
+
         elapsedTicks = 0;
         effectActive = true;
         customThemePlayed = false;
-        bouldersCreated = false;
+        rocksCreated = false;
         appliedCameraShake = 0.0F;
 
         captureBand(level,
@@ -162,20 +169,30 @@ public final class TimeEraseFractureEffect {
     }
 
     public static void reset() {
+        stopTheme();
         BLOCKS.clear();
-        BOULDERS.clear();
+        ROCKS.clear();
         capturedLevel = null;
         previousAbilityActive = false;
         effectActive = false;
         customThemePlayed = false;
-        bouldersCreated = false;
+        rocksCreated = false;
         elapsedTicks = 0;
         appliedCameraShake = 0.0F;
     }
 
+    private static void stopTheme() {
+        if (themeInstance != null) {
+            Minecraft.getInstance().getSoundManager().stop(themeInstance);
+            themeInstance = null;
+        }
+    }
+
     /**
-     * Capture only the upper terrain face in one of three four-block rings.
-     * The bounded scan is at most a 25x25 footprint, not 60x60xvertical.
+     * Capture exposed block models in one five-block-wide ring. The scan extends
+     * above the ground to include trees and structures, and a few blocks below
+     * the surface to preserve exposed cliff faces. Buried underground mass is
+     * intentionally excluded.
      */
     private static void captureBand(ClientLevel level, int cx, int cy, int cz, int bandIndex) {
         if (bandIndex < 0 || bandIndex >= BAND_COUNT || BLOCKS.size() >= MAX_BLOCKS) return;
@@ -189,6 +206,7 @@ public final class TimeEraseFractureEffect {
                 ^ cy ^ (0x4B435246L + bandIndex * 0x9E3779B9L));
         List<BlockSnapshot> reservoir = new ArrayList<>(capacity);
         int seen = 0;
+        BlockPos.MutableBlockPos scanPos = new BlockPos.MutableBlockPos();
 
         for (int x = cx - outerRadius; x <= cx + outerRadius; x++) {
             int dx = x - cx;
@@ -203,28 +221,34 @@ public final class TimeEraseFractureEffect {
                 int surfaceY = findTerrainSurfaceY(level, x, z);
                 if (surfaceY == Integer.MIN_VALUE) continue;
 
-                BlockPos pos = new BlockPos(x, surfaceY, z);
-                BlockState state = level.getBlockState(pos);
-                int faceMask = 1; // Top face only, plus exposed cliff walls.
-                if (findTerrainSurfaceY(level, x, z - 1) < surfaceY) faceMask |= 1 << 2;
-                if (findTerrainSurfaceY(level, x, z + 1) < surfaceY) faceMask |= 1 << 3;
-                if (findTerrainSurfaceY(level, x - 1, z) < surfaceY) faceMask |= 1 << 4;
-                if (findTerrainSurfaceY(level, x + 1, z) < surfaceY) faceMask |= 1 << 5;
+                int minY = Math.max(level.getMinBuildHeight(), surfaceY - OBJECT_SCAN_BELOW);
+                int maxY = Math.min(level.getMaxBuildHeight() - 1, surfaceY + OBJECT_SCAN_ABOVE);
 
-                seen++;
-                BlockSnapshot snapshot = new BlockSnapshot(x, surfaceY, z, state, faceMask);
-                if (reservoir.size() < capacity) {
-                    reservoir.add(snapshot);
-                } else {
-                    int replace = random.nextInt(seen);
-                    if (replace < capacity) reservoir.set(replace, snapshot);
+                for (int y = maxY; y >= minY; y--) {
+                    scanPos.set(x, y, z);
+                    BlockState state = level.getBlockState(scanPos);
+                    if (state.isAir()
+                            || !state.getFluidState().isEmpty()
+                            || state.getRenderShape() == RenderShape.INVISIBLE
+                            || !hasExposedFace(level, x, y, z)) {
+                        continue;
+                    }
+
+                    seen++;
+                    BlockSnapshot snapshot = new BlockSnapshot(x, y, z, state);
+                    if (reservoir.size() < capacity) {
+                        reservoir.add(snapshot);
+                    } else {
+                        int replace = random.nextInt(seen);
+                        if (replace < capacity) reservoir.set(replace, snapshot);
+                    }
                 }
             }
         }
 
         for (BlockSnapshot snapshot : reservoir) {
             if (BLOCKS.size() >= MAX_BLOCKS) break;
-            BLOCKS.add(new BlockRecord(level, snapshot, cx, cz));
+            BLOCKS.add(new BlockRecord(level, snapshot));
         }
     }
 
@@ -235,8 +259,7 @@ public final class TimeEraseFractureEffect {
             BlockState state = level.getBlockState(pos);
             if (state.isAir()
                     || !state.getFluidState().isEmpty()
-                    || state.is(BlockTags.LEAVES)
-                    || state.is(BlockTags.LOGS)
+                    || state.getRenderShape() == RenderShape.INVISIBLE
                     || !state.isSolidRender(level, pos)) {
                 continue;
             }
@@ -245,30 +268,33 @@ public final class TimeEraseFractureEffect {
         return Integer.MIN_VALUE;
     }
 
+    private static boolean hasExposedFace(ClientLevel level, int x, int y, int z) {
+        BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
+        for (int[] offset : NEIGHBORS) {
+            neighborPos.set(x + offset[0], y + offset[1], z + offset[2]);
+            BlockState neighbor = level.getBlockState(neighborPos);
+            if (neighbor.isAir() || !neighbor.isSolidRender(level, neighborPos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static void render(PoseStack poseStack, MultiBufferSource.BufferSource buffer,
                               Camera camera, float partialTick) {
         if (!effectActive || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-
         if (elapsedTicks < SHATTER_TICK) {
-            // The captured landscape is rendered only until the rocks separate.
-            renderIntactBlocks(poseStack, buffer, view);
+            renderCapturedScene(poseStack, buffer, view);
             buffer.endBatch();
-            if (!BLOCKS.isEmpty()) {
-                renderCracks(poseStack, buffer, view, partialTick);
-            }
-        } else {
-            // Important: after the boulders emerge, NO captured terrain blocks
-            // or crack overlays are drawn. The region behind them is fully empty.
-            if (!BOULDERS.isEmpty()) {
-                renderBoulders(poseStack, buffer, view, partialTick);
-            }
+        } else if (!ROCKS.isEmpty()) {
+            renderRocks(poseStack, buffer, view, partialTick);
         }
     }
 
-    private static void renderIntactBlocks(PoseStack poseStack, MultiBufferSource buffer,
-                                           View camera) {
+    private static void renderCapturedScene(PoseStack poseStack, MultiBufferSource buffer,
+                                            View camera) {
         Minecraft minecraft = Minecraft.getInstance();
         BlockRenderDispatcher dispatcher = minecraft.getBlockRenderer();
 
@@ -293,65 +319,12 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Textured asphalt-like fissures, derived from the user's crack reference.
-     * The texture has a transparent background and widened irregular grooves,
-     * instead of the old thin black vector stripes.
+     * Creates irregular faceted stone fragments: thirteen large diamond-like
+     * pieces, four roughly one-block angular pieces and four half-block pieces.
+     * Spawn anchors in the forward four-block camera safety zone are rejected.
      */
-    private static void renderCracks(PoseStack poseStack,
-                                     MultiBufferSource.BufferSource buffer,
-                                     View camera, float partialTick) {
-        VertexConsumer consumer = buffer.getBuffer(CRACK_RENDER_TYPE);
-        poseStack.pushPose();
-        poseStack.translate(-camera.x, -camera.y, -camera.z);
-        Matrix4f matrix = poseStack.last().pose();
-
-        float now = elapsedTicks + partialTick;
-
-        for (BlockRecord record : BLOCKS) {
-            if (!isInView(record.x + 0.5D, record.y + 0.5D, record.z + 0.5D, camera)) continue;
-
-            float reveal = now - record.crackStartTick;
-            if (reveal <= 0.0F) continue;
-            int alpha = Mth.clamp((int) (Mth.clamp(reveal / 3.5F, 0.0F, 1.0F) * 245.0F), 0, 245);
-
-            for (int face = 0; face < 6; face++) {
-                if ((record.faceMask & (1 << face)) == 0 || face == 1) continue;
-                int rotation = (int) ((record.x * 31L + record.z * 17L + face * 13L) & 3L);
-                float[] origin = FACE_ORIGIN[face];
-                float[] normal = NORMAL[face];
-                float[] axisU = U_AXIS[face];
-                float[] axisV = V_AXIS[face];
-
-                for (int corner = 0; corner < 4; corner++) {
-                    float u = (corner == 1 || corner == 2) ? 1.0F : 0.0F;
-                    float v = corner >= 2 ? 1.0F : 0.0F;
-                    float x = origin[0] + axisU[0] * (u - 0.5F) + axisV[0] * (v - 0.5F) + normal[0] * 0.012F;
-                    float y = origin[1] + axisU[1] * (u - 0.5F) + axisV[1] * (v - 0.5F) + normal[1] * 0.012F;
-                    float z = origin[2] + axisU[2] * (u - 0.5F) + axisV[2] * (v - 0.5F) + normal[2] * 0.012F;
-                    float[] uv = TEXTURE_UV[(corner + rotation) & 3];
-
-                    consumer.vertex(matrix, record.x + x, record.y + y, record.z + z)
-                            .color(255, 255, 255, alpha)
-                            .uv(uv[0], uv[1])
-                            .overlayCoords(OverlayTexture.NO_OVERLAY)
-                            .uv2(record.packedLight)
-                            .normal(normal[0], normal[1], normal[2])
-                            .endVertex();
-                }
-            }
-        }
-
-        poseStack.popPose();
-        buffer.endBatch(CRACK_RENDER_TYPE);
-    }
-
-    /**
-     * Creates thirteen widely distributed large rock clusters. Each visible
-     * boulder is built from 6-8 full, locally textured terrain pieces; it is
-     * intentionally not one tiny shard per source block.
-     */
-    private static void createBoulders() {
-        BOULDERS.clear();
+    private static void createRocks() {
+        ROCKS.clear();
         if (BLOCKS.isEmpty()) return;
 
         Random random = new Random(
@@ -359,147 +332,229 @@ public final class TimeEraseFractureEffect {
                         ^ ((long) Math.floor(centerZ))
                         ^ 0x4B43524F434BL
         );
-        List<BlockRecord> centers = new ArrayList<>(BOULDER_COUNT);
+        List<BlockRecord> usedAnchors = new ArrayList<>(
+                BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT
+        );
 
-        for (int attempt = 0; attempt < BOULDER_COUNT * 80
-                && centers.size() < BOULDER_COUNT; attempt++) {
+        for (int i = 0; i < BIG_ROCK_COUNT; i++) {
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 3.0D);
+            if (anchor == null) break;
+            usedAnchors.add(anchor);
+            addRock(anchor, random,
+                    1.45F + random.nextFloat() * 0.80F,
+                    0.14F + random.nextFloat() * 0.10F,
+                    0.23F + random.nextFloat() * 0.13F);
+        }
+
+        for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.55D);
+            if (anchor == null) break;
+            usedAnchors.add(anchor);
+            addRock(anchor, random,
+                    0.62F + random.nextFloat() * 0.16F,
+                    0.15F + random.nextFloat() * 0.09F,
+                    0.27F + random.nextFloat() * 0.12F);
+        }
+
+        for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.95D);
+            if (anchor == null) break;
+            usedAnchors.add(anchor);
+            addRock(anchor, random,
+                    0.29F + random.nextFloat() * 0.10F,
+                    0.17F + random.nextFloat() * 0.09F,
+                    0.30F + random.nextFloat() * 0.12F);
+        }
+    }
+
+    private static BlockRecord pickAnchor(Random random, List<BlockRecord> used, double minSpacing) {
+        double minSpacingSquared = minSpacing * minSpacing;
+        for (int attempt = 0; attempt < 900; attempt++) {
             BlockRecord candidate = BLOCKS.get(random.nextInt(BLOCKS.size()));
+            if (used.contains(candidate)) continue;
+
+            double dx = candidate.x + 0.5D - centerX;
+            double dz = candidate.z + 0.5D - centerZ;
+            double distanceSquared = dx * dx + dz * dz;
+            double forwardDistance = dx * forwardX + dz * forwardZ;
+
+            // No large or small fragment may spawn within four horizontal
+            // blocks in front of the player's initial view direction.
+            if (forwardDistance > 0.0D && distanceSquared < 16.0D) continue;
+
             boolean spaced = true;
-            for (BlockRecord chosen : centers) {
-                double dx = candidate.x - chosen.x;
-                double dz = candidate.z - chosen.z;
-                if (dx * dx + dz * dz < 10.0D) {
+            for (BlockRecord chosen : used) {
+                double sx = candidate.x - chosen.x;
+                double sz = candidate.z - chosen.z;
+                if (sx * sx + sz * sz < minSpacingSquared) {
                     spaced = false;
                     break;
                 }
             }
-            if (spaced) centers.add(candidate);
+            if (spaced) return candidate;
         }
-
-        // If terrain geometry is very irregular, fill remaining slots without duplicates.
-        for (BlockRecord candidate : BLOCKS) {
-            if (centers.size() >= BOULDER_COUNT) break;
-            if (!centers.contains(candidate)) centers.add(candidate);
-        }
-
-        for (BlockRecord anchor : centers) {
-            List<BoulderPiece> pieces = new ArrayList<>(8);
-            int pieceCount = 6 + random.nextInt(3);
-
-            for (int pieceIndex = 0; pieceIndex < pieceCount; pieceIndex++) {
-                BlockRecord material = anchor;
-                if (pieceIndex > 0) {
-                    double bestDistance = Double.MAX_VALUE;
-                    for (BlockRecord sample : BLOCKS) {
-                        double dx = sample.x - anchor.x;
-                        double dz = sample.z - anchor.z;
-                        double distance = dx * dx + dz * dz;
-                        if (distance < bestDistance && distance < 20.0D
-                                && random.nextFloat() < 0.18F) {
-                            bestDistance = distance;
-                            material = sample;
-                        }
-                    }
-                }
-
-                float offsetX = 0.0F;
-                float offsetY = 0.0F;
-                float offsetZ = 0.0F;
-                if (pieceIndex > 0) {
-                    float angle = random.nextFloat() * (float) (Math.PI * 2.0D);
-                    float spread = 0.55F + random.nextFloat() * 1.30F;
-                    offsetX = (float) Math.cos(angle) * spread;
-                    offsetZ = (float) Math.sin(angle) * spread;
-                    offsetY = (random.nextFloat() - 0.35F) * 1.15F;
-                }
-
-                // 1.15-1.70 block-sized pieces create a single large 3D mass.
-                float scale = 1.75F + random.nextFloat() * 0.65F;
-                pieces.add(new BoulderPiece(
-                        material.state,
-                        material.packedLight,
-                        offsetX,
-                        offsetY,
-                        offsetZ,
-                        scale
-                ));
-            }
-
-            double dx = anchor.x + 0.5D - centerX;
-            double dz = anchor.z + 0.5D - centerZ;
-            double length = Math.sqrt(dx * dx + dz * dz);
-            float radialX = length > 0.001D ? (float) (dx / length) : 0.0F;
-            float radialZ = length > 0.001D ? (float) (dz / length) : 0.0F;
-
-            float velocityX = radialX * (0.008F + random.nextFloat() * 0.012F)
-                    + (random.nextFloat() - 0.5F) * 0.012F;
-            float velocityZ = radialZ * (0.008F + random.nextFloat() * 0.012F)
-                    + (random.nextFloat() - 0.5F) * 0.012F;
-            float velocityY = 0.020F + random.nextFloat() * 0.010F;
-
-            BOULDERS.add(new Boulder(
-                    anchor.x + 0.5F,
-                    anchor.y + 1.0F,
-                    anchor.z + 0.5F,
-                    velocityX,
-                    velocityY,
-                    velocityZ,
-                    random.nextInt(7),
-                    random.nextFloat() * 360.0F,
-                    (random.nextBoolean() ? 1.0F : -1.0F) * (0.22F + random.nextFloat() * 0.35F),
-                    (random.nextBoolean() ? 1.0F : -1.0F) * (0.10F + random.nextFloat() * 0.20F),
-                    pieces
-            ));
-        }
+        return null;
     }
 
-    private static void renderBoulders(PoseStack poseStack,
-                                       MultiBufferSource.BufferSource buffer,
-                                       View camera, float partialTick) {
+    private static void addRock(BlockRecord anchor, Random random,
+                                float scale, float horizontalSpeed, float verticalSpeed) {
+        double dx = anchor.x + 0.5D - centerX;
+        double dz = anchor.z + 0.5D - centerZ;
+        double length = Math.sqrt(dx * dx + dz * dz);
+        float directionX = length > 0.001D ? (float) (dx / length) : 0.0F;
+        float directionZ = length > 0.001D ? (float) (dz / length) : 0.0F;
+
+        float velocityX = directionX * horizontalSpeed
+                + (random.nextFloat() - 0.5F) * 0.09F;
+        float velocityZ = directionZ * horizontalSpeed
+                + (random.nextFloat() - 0.5F) * 0.09F;
+        float velocityY = verticalSpeed;
+
+        ROCKS.add(new Rock(
+                anchor.x + 0.5F,
+                anchor.y + 0.45F,
+                anchor.z + 0.5F,
+                velocityX,
+                velocityY,
+                velocityZ,
+                scale,
+                random.nextInt(4),
+                random.nextFloat() * 360.0F,
+                (random.nextBoolean() ? 1.0F : -1.0F) * (1.0F + random.nextFloat() * 2.0F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.8F + random.nextFloat() * 1.8F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.7F + random.nextFloat() * 1.5F),
+                createRockMesh(random)
+        ));
+    }
+
+    /**
+     * Eight-vertex angular polyhedron: an uneven six-point belt joined to
+     * offset top and bottom peaks. The triangles create a visibly faceted,
+     * non-cubic rhombus/shard silhouette instead of scaled block cubes.
+     */
+    private static RockMesh createRockMesh(Random random) {
+        float[][] vertices = new float[8][3];
+        vertices[0] = new float[] {
+                (random.nextFloat() - 0.5F) * 0.22F,
+                0.76F + random.nextFloat() * 0.18F,
+                (random.nextFloat() - 0.5F) * 0.22F
+        };
+
+        float angleOffset = random.nextFloat() * (float) (Math.PI * 2.0D);
+        for (int i = 0; i < 6; i++) {
+            float angle = angleOffset + i * ((float) Math.PI / 3.0F);
+            float radiusX = 0.53F + random.nextFloat() * 0.23F;
+            float radiusZ = 0.48F + random.nextFloat() * 0.26F;
+            float y = (random.nextFloat() - 0.5F) * 0.52F;
+            vertices[i + 1] = new float[] {
+                    (float) Math.cos(angle) * radiusX,
+                    y,
+                    (float) Math.sin(angle) * radiusZ
+            };
+        }
+
+        vertices[7] = new float[] {
+                (random.nextFloat() - 0.5F) * 0.26F,
+                -0.68F - random.nextFloat() * 0.16F,
+                (random.nextFloat() - 0.5F) * 0.26F
+        };
+
+        int[][] faces = new int[12][3];
+        for (int i = 0; i < 6; i++) {
+            int current = i + 1;
+            int next = ((i + 1) % 6) + 1;
+            faces[i] = new int[] {0, current, next};
+            faces[i + 6] = new int[] {7, next, current};
+        }
+        return new RockMesh(vertices, faces);
+    }
+
+    private static void renderRocks(PoseStack poseStack,
+                                    MultiBufferSource.BufferSource buffer,
+                                    View camera, float partialTick) {
         Minecraft minecraft = Minecraft.getInstance();
-        BlockRenderDispatcher dispatcher = minecraft.getBlockRenderer();
-        float now = elapsedTicks + partialTick;
+        TextureAtlasSprite stoneSprite = minecraft.getBlockRenderer()
+                .getBlockModelShaper()
+                .getBlockModel(Blocks.STONE.defaultBlockState())
+                .getParticleIcon();
+        VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
 
-        for (Boulder boulder : BOULDERS) {
-            float age = now - SHATTER_TICK - boulder.spawnDelay;
-            if (age < 0.0F) continue;
+        for (Rock rock : ROCKS) {
+            float age = elapsedTicks + partialTick - SHATTER_TICK - rock.spawnDelay;
+            if (age < 0.0F || age >= ROCK_LIFETIME_TICKS) continue;
 
-            double x = boulder.x + boulder.velocityX * age;
-            double y = boulder.y + boulder.velocityY * age;
-            double z = boulder.z + boulder.velocityZ * age;
+            float alpha = age <= 15.0F ? 1.0F : (ROCK_LIFETIME_TICKS - age) / 5.0F;
+            int alphaByte = (int) (Math.max(0.0F, Math.min(1.0F, alpha)) * 255.0F);
+
+            double x = rock.x + rock.velocityX * age;
+            double y = rock.y + rock.velocityY * age;
+            double z = rock.z + rock.velocityZ * age;
             if (!isInView(x, y, z, camera)) continue;
 
-            float bob = (float) Math.sin(age * 0.045F + boulder.phase) * 0.08F;
-
             poseStack.pushPose();
-            poseStack.translate(x - camera.x, y - camera.y + bob, z - camera.z);
-            poseStack.mulPose(Axis.YP.rotationDegrees(
-                    boulder.yaw + age * boulder.yawSpeed));
-            poseStack.mulPose(Axis.XP.rotationDegrees(
-                    boulder.pitch + age * boulder.pitchSpeed));
+            poseStack.translate(x - camera.x, y - camera.y, z - camera.z);
+            poseStack.mulPose(Axis.YP.rotationDegrees(rock.yaw + age * rock.yawSpeed));
+            poseStack.mulPose(Axis.XP.rotationDegrees(rock.pitch + age * rock.pitchSpeed));
+            poseStack.mulPose(Axis.ZP.rotationDegrees(rock.roll + age * rock.rollSpeed));
+            poseStack.scale(rock.scale, rock.scale, rock.scale);
 
-            for (BoulderPiece piece : boulder.pieces) {
-                poseStack.pushPose();
-                poseStack.translate(
-                        piece.offsetX - piece.scale * 0.5F,
-                        piece.offsetY - piece.scale * 0.5F,
-                        piece.offsetZ - piece.scale * 0.5F
-                );
-                poseStack.scale(piece.scale, piece.scale, piece.scale);
-                dispatcher.renderSingleBlock(
-                        piece.state,
-                        poseStack,
-                        buffer,
-                        piece.packedLight,
-                        OverlayTexture.NO_OVERLAY
-                );
-                poseStack.popPose();
+            Matrix4f matrix = poseStack.last().pose();
+            for (int[] face : rock.mesh.faces) {
+                float[] a = rock.mesh.vertices[face[0]];
+                float[] b = rock.mesh.vertices[face[1]];
+                float[] c = rock.mesh.vertices[face[2]];
+
+                float ux = b[0] - a[0];
+                float uy = b[1] - a[1];
+                float uz = b[2] - a[2];
+                float vx = c[0] - a[0];
+                float vy = c[1] - a[1];
+                float vz = c[2] - a[2];
+
+                float nx = uy * vz - uz * vy;
+                float ny = uz * vx - ux * vz;
+                float nz = ux * vy - uy * vx;
+                float normalLength = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                if (normalLength < 1.0E-5F) continue;
+                nx /= normalLength;
+                ny /= normalLength;
+                nz /= normalLength;
+
+                float faceCenterX = (a[0] + b[0] + c[0]) / 3.0F;
+                float faceCenterY = (a[1] + b[1] + c[1]) / 3.0F;
+                float faceCenterZ = (a[2] + b[2] + c[2]) / 3.0F;
+                if (nx * faceCenterX + ny * faceCenterY + nz * faceCenterZ < 0.0F) {
+                    float[] swap = b;
+                    b = c;
+                    c = swap;
+                    nx = -nx;
+                    ny = -ny;
+                    nz = -nz;
+                }
+
+                float diffuse = Math.max(0.0F, nx * -0.38F + ny * 0.84F + nz * 0.38F);
+                float shade = 0.30F + diffuse * 0.70F;
+                float variation = 0.84F + ((face[0] * 17 + face[1] * 11 + face[2] * 7) & 7) * 0.018F;
+                int color = (int) (235.0F * Math.min(1.0F, shade * variation));
+
+                float[][] triangle = {a, b, c};
+                for (int vertex = 0; vertex < 3; vertex++) {
+                    float[] point = triangle[vertex];
+                    float[] uv = TRIANGLE_UV[vertex];
+                    consumer.vertex(matrix, point[0], point[1], point[2])
+                            .color(color, color, color, alphaByte)
+                            .uv(stoneSprite.getU(uv[0]), stoneSprite.getV(uv[1]))
+                            .overlayCoords(OverlayTexture.NO_OVERLAY)
+                            .uv2(LightTexture.FULL_BRIGHT)
+                            .normal(nx, ny, nz)
+                            .endVertex();
+                }
             }
 
             poseStack.popPose();
         }
 
-        buffer.endBatch();
+        buffer.endBatch(ROCK_RENDER_TYPE);
     }
 
     public static void applyCameraShake(PoseStack poseStack, float partialTick) {
@@ -559,14 +614,12 @@ public final class TimeEraseFractureEffect {
     private static final class BlockSnapshot {
         final int x, y, z;
         final BlockState state;
-        final int faceMask;
 
-        BlockSnapshot(int x, int y, int z, BlockState state, int faceMask) {
+        BlockSnapshot(int x, int y, int z, BlockState state) {
             this.x = x;
             this.y = y;
             this.z = z;
             this.state = state;
-            this.faceMask = faceMask;
         }
     }
 
@@ -574,67 +627,53 @@ public final class TimeEraseFractureEffect {
         final int x, y, z;
         final BlockState state;
         final int packedLight;
-        final int faceMask;
-        final float crackStartTick;
 
-        BlockRecord(ClientLevel level, BlockSnapshot snapshot, int centerX, int centerZ) {
+        BlockRecord(ClientLevel level, BlockSnapshot snapshot) {
             x = snapshot.x;
             y = snapshot.y;
             z = snapshot.z;
             state = snapshot.state;
-            faceMask = snapshot.faceMask;
             packedLight = LevelRenderer.getLightColor(level, new BlockPos(x, y, z));
-
-            double dx = x + 0.5D - centerX;
-            double dz = z + 0.5D - centerZ;
-            double distance = Math.sqrt(dx * dx + dz * dz);
-            crackStartTick = (float) (distance / RADIUS) * CRACKS_REACH_TICK;
         }
     }
 
-    private static final class Boulder {
+    private static final class RockMesh {
+        final float[][] vertices;
+        final int[][] faces;
+
+        RockMesh(float[][] vertices, int[][] faces) {
+            this.vertices = vertices;
+            this.faces = faces;
+        }
+    }
+
+    private static final class Rock {
         final float x, y, z;
         final float velocityX, velocityY, velocityZ;
+        final float scale;
         final int spawnDelay;
-        final float yaw, yawSpeed, pitchSpeed;
-        final float pitch;
-        final float phase;
-        final List<BoulderPiece> pieces;
+        final float yaw, yawSpeed, pitchSpeed, roll, rollSpeed;
+        final RockMesh mesh;
 
-        Boulder(float x, float y, float z,
-                float velocityX, float velocityY, float velocityZ,
-                int spawnDelay, float yaw, float yawSpeed, float pitchSpeed,
-                List<BoulderPiece> pieces) {
+        Rock(float x, float y, float z,
+             float velocityX, float velocityY, float velocityZ,
+             float scale, int spawnDelay,
+             float yaw, float yawSpeed, float pitchSpeed,
+             float roll, float rollSpeed, RockMesh mesh) {
             this.x = x;
             this.y = y;
             this.z = z;
             this.velocityX = velocityX;
             this.velocityY = velocityY;
             this.velocityZ = velocityZ;
+            this.scale = scale;
             this.spawnDelay = spawnDelay;
             this.yaw = yaw;
             this.yawSpeed = yawSpeed;
             this.pitchSpeed = pitchSpeed;
-            this.pitch = (yaw * 0.17F) % 35.0F;
-            this.phase = yaw * 0.013F;
-            this.pieces = pieces;
-        }
-    }
-
-    private static final class BoulderPiece {
-        final BlockState state;
-        final int packedLight;
-        final float offsetX, offsetY, offsetZ;
-        final float scale;
-
-        BoulderPiece(BlockState state, int packedLight,
-                     float offsetX, float offsetY, float offsetZ, float scale) {
-            this.state = state;
-            this.packedLight = packedLight;
-            this.offsetX = offsetX;
-            this.offsetY = offsetY;
-            this.offsetZ = offsetZ;
-            this.scale = scale;
+            this.roll = roll;
+            this.rollSpeed = rollSpeed;
+            this.mesh = mesh;
         }
     }
 }

@@ -374,7 +374,7 @@ public final class TimeEraseFractureEffect {
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    0.62F + random.nextFloat() * 0.16F,
+                    0.90F + random.nextFloat() * 0.15F,
                     0.15F + random.nextFloat() * 0.09F,
                     0.27F + random.nextFloat() * 0.12F,
                     true);
@@ -385,7 +385,7 @@ public final class TimeEraseFractureEffect {
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    0.29F + random.nextFloat() * 0.10F,
+                    0.45F + random.nextFloat() * 0.10F,
                     0.17F + random.nextFloat() * 0.09F,
                     0.30F + random.nextFloat() * 0.12F,
                     true);
@@ -470,12 +470,12 @@ public final class TimeEraseFractureEffect {
                 float bottomRadiusZ = 0.47F + random.nextFloat() * 0.12F;
                 vertices[i] = new float[] {
                         (float) Math.cos(angle) * topRadiusX,
-                        0.27F + (random.nextFloat() - 0.5F) * 0.16F,
+                        0.42F + (random.nextFloat() - 0.5F) * 0.12F,
                         (float) Math.sin(angle) * topRadiusZ
                 };
                 vertices[i + 4] = new float[] {
                         (float) Math.cos(angle + 0.10F) * bottomRadiusX,
-                        -0.34F - random.nextFloat() * 0.13F,
+                        -0.42F - random.nextFloat() * 0.12F,
                         (float) Math.sin(angle + 0.10F) * bottomRadiusZ
                 };
             }

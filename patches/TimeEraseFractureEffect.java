@@ -66,9 +66,9 @@ public final class TimeEraseFractureEffect {
     private static final int SLASH_DRAW_TICKS = 3;
     private static final int SLASH_FADE_TICKS = 2;
     private static final int FUTURE_LEAD_TICKS = 25;
-    private static final int BIG_ROCK_COUNT = 20;
-    private static final int MEDIUM_ROCK_COUNT = 24;
-    private static final int SMALL_ROCK_COUNT = 50;
+    private static final int BIG_ROCK_COUNT = 22;
+    private static final int MEDIUM_ROCK_COUNT = 26;
+    private static final int SMALL_ROCK_COUNT = 52;
 
     private static final int[][] NEIGHBORS = {
             {1, 0, 0}, {-1, 0, 0},
@@ -378,8 +378,8 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Twenty large wall plates/beams, twenty-four medium masonry chunks and
-     * fifty small sharp chips. Existing size and motion profiles are unchanged.
+     * Twenty-two large wall plates/beams, twenty-six medium masonry chunks and
+     * fifty-two small sharp chips. Existing size and motion profiles are unchanged.
      */
     private static void createRocks() {
         ROCKS.clear();

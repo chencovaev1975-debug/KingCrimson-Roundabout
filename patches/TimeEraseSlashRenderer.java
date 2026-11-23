@@ -29,13 +29,13 @@ public final class TimeEraseSlashRenderer {
         RenderSystem.blendFunc(770, 1);
         try {
             drawRibbon(matrix, screenWidth, screenHeight, reveal, fade,
-                    44.0F, 1.0F, 0.0F, 0.34F, 0.10F);
+                    62.0F, 1.0F, 0.0F, 0.34F, 0.13F);
             drawRibbon(matrix, screenWidth, screenHeight, reveal, fade,
-                    26.0F, 1.0F, 0.015F, 0.48F, 0.42F);
+                    38.0F, 1.0F, 0.015F, 0.48F, 0.46F);
             drawRibbon(matrix, screenWidth, screenHeight, reveal, fade,
-                    14.0F, 1.0F, 0.68F, 0.78F, 0.78F);
+                    22.0F, 1.0F, 0.68F, 0.78F, 0.82F);
             drawRibbon(matrix, screenWidth, screenHeight, reveal, fade,
-                    5.0F, 1.0F, 1.0F, 1.0F, 0.86F);
+                    8.0F, 1.0F, 1.0F, 1.0F, 0.90F);
         } finally {
             // Leave the HUD's expected state active for the remaining GUI passes.
             RenderSystem.defaultBlendFunc();

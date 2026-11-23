@@ -168,7 +168,7 @@ powers = root / "common/src/main/java/net/hydra/jojomod/stand/powers/PowersKingC
 update_source_once(
     powers,
     "return ClientNetworking.getAppropriateConfig().kingCrimsonSettings.timeEraseDuration;",
-    "return ClientNetworking.getAppropriateConfig().kingCrimsonSettings.timeEraseDuration + (23 * 20);",
+    "return 28 * 20;",
     "extend Time Erase by 23 seconds"
 )
 
@@ -205,36 +205,20 @@ update_source_once(
     "add Diavolo theme sound definition"
 )
 
-# The widened crack texture is required. The optional audio is copied when uploaded;
-# the renderer has its 4.20-second playback trigger already wired to the registered event.
+# Install the user's separately uploaded Diavolo theme. Do not alter the
+# native Time Erase activation sound here.
 assets_dir = Path(__file__).with_name("assets")
-crack_asset = assets_dir / "time_erase_cracks.png"
-if not crack_asset.is_file():
-    raise SystemExit("Missing required crack texture: patches/assets/time_erase_cracks.png")
-
-crack_bytes = crack_asset.read_bytes()
-if crack_bytes[:8] != bytes.fromhex("89504e470d0a1a0a"):
-    raise SystemExit("Time Erase crack texture is not a valid PNG")
-crack_target = root / "common/src/main/resources/assets/roundabout/textures/misc/time_erase_cracks.png"
-crack_target.parent.mkdir(parents=True, exist_ok=True)
-crack_target.write_bytes(crack_bytes)
-
 audio_candidates = sorted(assets_dir.glob("*.ogg"))
-if len(audio_candidates) == 1:
-    audio_asset = audio_candidates[0]
-    audio_bytes = audio_asset.read_bytes()
-    if not audio_bytes.startswith(b"OggS"):
-        raise SystemExit("Diavolo theme asset is not a valid Ogg container")
-    audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
-    audio_target.parent.mkdir(parents=True, exist_ok=True)
-    audio_target.write_bytes(audio_bytes)
-    print(f"Installed Diavolo theme audio asset from {audio_asset.name}.")
-elif len(audio_candidates) == 0:
-    raise SystemExit("Missing Diavolo theme audio: upload the .ogg file to patches/assets/")
-else:
+if len(audio_candidates) != 1:
     raise SystemExit("Expected exactly one .ogg file in patches/assets/; found: "
                      + ", ".join(path.name for path in audio_candidates))
+audio_asset = audio_candidates[0]
+audio_bytes = audio_asset.read_bytes()
+if not audio_bytes.startswith(b"OggS"):
+    raise SystemExit("Diavolo theme asset is not a valid Ogg container")
+audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
+audio_target.parent.mkdir(parents=True, exist_ok=True)
+audio_target.write_bytes(audio_bytes)
+print(f"Installed Diavolo theme audio asset from {audio_asset.name}.")
+print("Applied the 20-block exposed-scene snapshot and the faceted stone burst.")
 
-print("Installed the widened fracture texture and the optimized 13-boulder Time Erase scene.")
-
-print("Applied: native Time Erase skybox plus local fracture wave, non-rotating stone chips, and a brief vertical shake.")

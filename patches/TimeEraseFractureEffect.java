@@ -57,15 +57,15 @@ public final class TimeEraseFractureEffect {
     private static final int OBJECT_SCAN_BELOW = 12;
 
     private static final int SHATTER_TICK = 46;
-    private static final int SLASH_START_TICK = SHATTER_TICK - 4;
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
     private static final int ROCK_EMERGENCE_TICKS = 7;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
-    private static final int SLASH_DRAW_TICKS = 10;
-    private static final int SLASH_FADE_TICKS = 7;
+    private static final double SLASH_DELAY_SECONDS = 1.08D;
+    private static final double SLASH_TRAVEL_SECONDS = 0.45D;
+    private static final double SLASH_FADE_SECONDS = 0.10D;
     private static final int FUTURE_LEAD_TICKS = 25;
     private static final int BIG_ROCK_COUNT = 22;
     private static final int MEDIUM_ROCK_COUNT = 26;
@@ -98,6 +98,7 @@ public final class TimeEraseFractureEffect {
     private static boolean customThemePlayed;
     private static boolean rocksCreated;
     private static int elapsedTicks;
+    private static long effectStartNanos;
     private static ClientLevel capturedLevel;
     private static double centerX;
     private static double centerY;
@@ -181,6 +182,7 @@ public final class TimeEraseFractureEffect {
         centerZ = player.getZ();
 
         elapsedTicks = 0;
+        effectStartNanos = System.nanoTime();
         effectActive = true;
         customThemePlayed = false;
         rocksCreated = false;
@@ -206,6 +208,7 @@ public final class TimeEraseFractureEffect {
         customThemePlayed = false;
         rocksCreated = false;
         elapsedTicks = 0;
+        effectStartNanos = 0L;
         appliedCameraShake = 0.0F;
         FUTURE_PREDICTIONS.clear();
         FUTURE_PARTICLE_TIMES.clear();
@@ -391,6 +394,11 @@ public final class TimeEraseFractureEffect {
      * Twenty-two large wall plates/beams, twenty-six medium masonry chunks and
      * fifty-two small sharp chips. Existing size and motion profiles are unchanged.
      */
+    /**
+     * Medium debris forms the inner ring (2.5–3.5 blocks), large slabs sit
+     * immediately behind it (5–6 blocks), and small chips are sampled near
+     * those chosen anchors as secondary fragments.
+     */
     private static void createRocks() {
         ROCKS.clear();
         if (GROUND_ANCHORS.isEmpty()) return;
@@ -403,24 +411,15 @@ public final class TimeEraseFractureEffect {
         List<BlockRecord> usedAnchors = new ArrayList<>(
                 BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT
         );
+        List<BlockRecord> primaryAnchors = new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT);
 
-        // Large plates and beams occupy the outer ring and travel the farthest.
-        for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 4.0D, 10.0D, 17.0D);
-            if (anchor == null) break;
-            usedAnchors.add(anchor);
-            addRock(anchor, random,
-                    2.70F + random.nextFloat() * 0.50F,
-                    2.5F + random.nextFloat() * 1.5F,
-                    ROCK_EMERGENCE_TICKS,
-                    0);
-        }
-
-        // Medium broken masonry stays in the middle band.
+        // The medium ring is deliberately selected first so it owns the closest
+        // ground positions around the player.
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 2.6D, 5.0D, 12.0D);
+            BlockRecord anchor = pickAnchorWithReuse(random, usedAnchors, 0.95D, 2.5D, 3.5D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
+            primaryAnchors.add(anchor);
             addRock(anchor, random,
                     1.20F + random.nextFloat() * 0.45F,
                     1.2F + random.nextFloat() * 1.0F,
@@ -428,17 +427,108 @@ public final class TimeEraseFractureEffect {
                     1);
         }
 
-        // Fine fragments remain in the inner band.
-        for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.9D, 1.5D, 7.5D);
+        // The large plates sit just beyond the medium ring.
+        for (int i = 0; i < BIG_ROCK_COUNT; i++) {
+            BlockRecord anchor = pickAnchorWithReuse(random, usedAnchors, 1.45D, 5.0D, 6.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
+            primaryAnchors.add(anchor);
+            addRock(anchor, random,
+                    2.70F + random.nextFloat() * 0.50F,
+                    2.5F + random.nextFloat() * 1.5F,
+                    ROCK_EMERGENCE_TICKS,
+                    0);
+        }
+
+        // Fine fragments are not gathered into a separate inner pile. They are
+        // picked from ground positions close to medium and large anchor clusters.
+        List<BlockRecord> smallAnchors = new ArrayList<>(SMALL_ROCK_COUNT);
+        for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
+            BlockRecord anchor = pickSecondaryAnchor(random, primaryAnchors, smallAnchors);
+            if (anchor == null) break;
+            smallAnchors.add(anchor);
             addRock(anchor, random,
                     0.28F + random.nextFloat() * 0.24F,
                     0.25F + random.nextFloat() * 0.75F,
                     ROCK_EMERGENCE_TICKS,
                     2);
         }
+    }
+
+    /**
+     * Use distinct surface blocks first. If a tight ring has fewer ground
+     * columns than requested rocks, reuse an eligible column; addRock gives
+     * repeated anchors a small in-cell offset so their launch points differ.
+     */
+    private static BlockRecord pickAnchorWithReuse(Random random, List<BlockRecord> used,
+                                                    double minSpacing, double minRadius,
+                                                    double maxRadius) {
+        BlockRecord anchor = pickAnchor(random, used, minSpacing, minRadius, maxRadius);
+        if (anchor != null) return anchor;
+
+        for (int attempt = 0; attempt < Math.max(400, GROUND_ANCHORS.size() * 2); attempt++) {
+            BlockRecord candidate = GROUND_ANCHORS.get(random.nextInt(GROUND_ANCHORS.size()));
+            if (isSafeVisibleAnchor(candidate, minRadius, maxRadius)) return candidate;
+        }
+        return null;
+    }
+
+    /**
+     * Select a secondary chip anchor 0.65–2.35 blocks from a medium or large
+     * anchor. Chips are also spaced from one another to avoid a separate heap.
+     */
+    private static BlockRecord pickSecondaryAnchor(Random random,
+                                                   List<BlockRecord> primaryAnchors,
+                                                   List<BlockRecord> selectedSmallAnchors) {
+        double[] spacingFactors = {1.0D, 0.68D, 0.36D, 0.0D};
+        for (double spacingFactor : spacingFactors) {
+            double spacingSquared = 0.82D * 0.82D * spacingFactor * spacingFactor;
+
+            for (int attempt = 0; attempt < Math.max(900, GROUND_ANCHORS.size() * 2); attempt++) {
+                BlockRecord candidate = GROUND_ANCHORS.get(random.nextInt(GROUND_ANCHORS.size()));
+                if (primaryAnchors.contains(candidate) || selectedSmallAnchors.contains(candidate)) {
+                    continue;
+                }
+
+                double nearestPrimarySquared = Double.MAX_VALUE;
+                for (BlockRecord primary : primaryAnchors) {
+                    double dx = candidate.x - primary.x;
+                    double dz = candidate.z - primary.z;
+                    nearestPrimarySquared = Math.min(nearestPrimarySquared, dx * dx + dz * dz);
+                }
+                if (nearestPrimarySquared < 0.65D * 0.65D
+                        || nearestPrimarySquared > 2.35D * 2.35D) {
+                    continue;
+                }
+
+                boolean spaced = true;
+                for (BlockRecord previous : selectedSmallAnchors) {
+                    double dx = candidate.x - previous.x;
+                    double dz = candidate.z - previous.z;
+                    if (dx * dx + dz * dz < spacingSquared) {
+                        spaced = false;
+                        break;
+                    }
+                }
+                if (spaced) return candidate;
+            }
+        }
+
+        // On narrow terrain, keep the requested number of chips by relaxing only
+        // chip-to-chip spacing; the requirement to stay near a primary chunk remains.
+        for (int attempt = 0; attempt < Math.max(1200, GROUND_ANCHORS.size() * 3); attempt++) {
+            BlockRecord candidate = GROUND_ANCHORS.get(random.nextInt(GROUND_ANCHORS.size()));
+            if (primaryAnchors.contains(candidate) || selectedSmallAnchors.contains(candidate)) continue;
+            for (BlockRecord primary : primaryAnchors) {
+                double dx = candidate.x - primary.x;
+                double dz = candidate.z - primary.z;
+                double distanceSquared = dx * dx + dz * dz;
+                if (distanceSquared >= 0.65D * 0.65D && distanceSquared <= 2.35D * 2.35D) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
     }
 
     private static BlockRecord pickAnchor(Random random, List<BlockRecord> used,
@@ -520,8 +610,10 @@ public final class TimeEraseFractureEffect {
         float startY = anchor.y + 1.0F - buriedExtent - 0.12F;
         float emergenceHeight = buriedExtent * 2.0F + 0.24F;
 
+        float launchX = anchor.x + 0.5F + (random.nextFloat() - 0.5F) * 0.34F;
+        float launchZ = anchor.z + 0.5F + (random.nextFloat() - 0.5F) * 0.34F;
         ROCKS.add(new Rock(
-                anchor.x + 0.5F, startY, anchor.z + 0.5F,
+                launchX, startY, launchZ,
                 driftX, driftZ, radialTravel, emergenceHeight,
                 scale, random.nextInt(3), emergenceTicks,
                 random.nextFloat() * 360.0F,
@@ -824,23 +916,28 @@ public final class TimeEraseFractureEffect {
                 .endVertex();
     }
 
-    /** Returns the bottom-to-top slash reveal, or -1 when it is inactive. */
+    /** Returns normalized upward-travel progress, or -1 before the scheduled pass. */
     public static float getSlashRevealProgress(float partialTick) {
-        if (!effectActive) return -1.0F;
-        float age = elapsedTicks + partialTick - SLASH_START_TICK;
-        float total = SLASH_DRAW_TICKS + SLASH_FADE_TICKS;
-        if (age < 0.0F || age >= total) return -1.0F;
-        float progress = Math.min(1.0F, age / (float) SLASH_DRAW_TICKS);
-        return progress * progress * (3.0F - 2.0F * progress);
+        if (!effectActive || effectStartNanos == 0L) return -1.0F;
+        double elapsedSeconds = (System.nanoTime() - effectStartNanos) / 1_000_000_000.0D;
+        double slashAge = elapsedSeconds - SLASH_DELAY_SECONDS;
+        if (slashAge < 0.0D || slashAge > SLASH_TRAVEL_SECONDS + SLASH_FADE_SECONDS) {
+            return -1.0F;
+        }
+        return (float) Math.max(0.0D, Math.min(1.0D, slashAge / SLASH_TRAVEL_SECONDS));
     }
 
-    /** The slash stays full-strength while drawing, then thins and fades over two ticks. */
+    /** Hold full opacity during the pass, then softly fade after leaving the top edge. */
     public static float getSlashFade(float partialTick) {
-        if (!effectActive) return 0.0F;
-        float age = elapsedTicks + partialTick - SLASH_START_TICK;
-        if (age < 0.0F || age >= SLASH_DRAW_TICKS + SLASH_FADE_TICKS) return 0.0F;
-        if (age <= SLASH_DRAW_TICKS) return 1.0F;
-        return Math.max(0.0F, 1.0F - (age - SLASH_DRAW_TICKS) / (float) SLASH_FADE_TICKS);
+        if (!effectActive || effectStartNanos == 0L) return 0.0F;
+        double elapsedSeconds = (System.nanoTime() - effectStartNanos) / 1_000_000_000.0D;
+        double slashAge = elapsedSeconds - SLASH_DELAY_SECONDS;
+        if (slashAge < 0.0D || slashAge > SLASH_TRAVEL_SECONDS + SLASH_FADE_SECONDS) {
+            return 0.0F;
+        }
+        if (slashAge <= SLASH_TRAVEL_SECONDS) return 1.0F;
+        return (float) Math.max(0.0D,
+                1.0D - (slashAge - SLASH_TRAVEL_SECONDS) / SLASH_FADE_SECONDS);
     }
 
     /**

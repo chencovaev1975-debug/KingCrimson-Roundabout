@@ -449,6 +449,391 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
+     * Builds a unique, connected fracture network over every captured ground column.
+     * Shared edge ports are seeded from world coordinates, so cracks continue across
+     * neighboring blocks instead of repeating a tile-shaped decal.
+     */
+    private static void createGroundCracks() {
+        GROUND_CRACKS.clear();
+        if (capturedLevel == null || GROUND_ANCHORS.isEmpty()) return;
+
+        BlockRenderDispatcher dispatcher = Minecraft.getInstance().getBlockRenderer();
+        for (BlockRecord record : GROUND_ANCHORS) {
+            long seed = crackBlockSeed(record);
+            Random random = new Random(seed);
+            BakedModel model = dispatcher.getBlockModelShaper().getBlockModel(record.state);
+            List<BakedQuad> topQuads = model.getQuads(
+                    record.state, Direction.UP, RandomSource.create(seed));
+            TextureAtlasSprite sprite = topQuads.isEmpty()
+                    ? model.getParticleIcon()
+                    : topQuads.get(random.nextInt(topQuads.size())).getSprite();
+            if (sprite == null) continue;
+
+            CrackMeshBuilder builder = new CrackMeshBuilder();
+            List<CrackPoint> ports = new ArrayList<>(8);
+            for (int edge = 0; edge < 4; edge++) {
+                addCrackEdgePorts(ports, record, edge);
+            }
+
+            CrackPoint junction = new CrackPoint(
+                    0.27F + random.nextFloat() * 0.46F,
+                    0.27F + random.nextFloat() * 0.46F
+            );
+            List<CrackPath> paths = new ArrayList<>(10);
+
+            if (ports.isEmpty()) {
+                // Some blocks intentionally have no boundary connection; give them
+                // a distinct internal split rather than leaving a repeated empty tile.
+                CrackPoint start = randomBoundaryPoint(random);
+                CrackPoint end = randomBoundaryPoint(random);
+                paths.add(createWavyCrackPath(start, end, random,
+                        0.048F + random.nextFloat() * 0.038F,
+                        0.034F + random.nextFloat() * 0.046F));
+            } else {
+                for (CrackPoint port : ports) {
+                    paths.add(createWavyCrackPath(
+                            port, junction, random,
+                            0.046F + random.nextFloat() * 0.042F,
+                            0.034F + random.nextFloat() * 0.050F
+                    ));
+                }
+                if (ports.size() == 1) {
+                    CrackPoint localEnd = new CrackPoint(
+                            0.10F + random.nextFloat() * 0.80F,
+                            0.10F + random.nextFloat() * 0.80F
+                    );
+                    paths.add(createWavyCrackPath(junction, localEnd, random,
+                            0.038F + random.nextFloat() * 0.026F,
+                            0.030F + random.nextFloat() * 0.030F));
+                }
+            }
+
+            // Add irregular side fractures to create branching Y-junctions.
+            // Every branch has its own width, depth, number of bends and direction.
+            int branchCount = 1 + random.nextInt(2);
+            for (int i = 0; i < branchCount && !paths.isEmpty(); i++) {
+                CrackPath parent = paths.get(random.nextInt(paths.size()));
+                if (parent.points.size() < 3) continue;
+                int pivotIndex = 1 + random.nextInt(parent.points.size() - 2);
+                CrackPoint branchStart = parent.points.get(pivotIndex);
+                CrackPoint branchEnd = new CrackPoint(
+                        0.08F + random.nextFloat() * 0.84F,
+                        0.08F + random.nextFloat() * 0.84F
+                );
+                paths.add(createWavyCrackPath(
+                        branchStart, branchEnd, random,
+                        parent.halfWidth * (0.40F + random.nextFloat() * 0.22F),
+                        parent.lipHeight * (0.70F + random.nextFloat() * 0.28F)
+                ));
+            }
+
+            for (CrackPath path : paths) {
+                addCrackPath(builder, record, path, random);
+            }
+
+            if (builder.quadCount > 0) {
+                GROUND_CRACKS.add(builder.build(record, sprite));
+            }
+        }
+    }
+
+    private static long crackBlockSeed(BlockRecord record) {
+        long value = ((long) record.x * 0x9E3779B97F4A7C15L)
+                ^ ((long) record.y * 0xC2B2AE3D27D4EB4FL)
+                ^ ((long) record.z * 0x165667B19E3779F9L)
+                ^ 0x4B435F4652414354L;
+        return mixCrackSeed(value);
+    }
+
+    private static long mixCrackSeed(long value) {
+        value = (value ^ (value >>> 30)) * 0xBF58476D1CE4E5B9L;
+        value = (value ^ (value >>> 27)) * 0x94D049BB133111EBL;
+        return value ^ (value >>> 31);
+    }
+
+    /**
+     * A port is deterministic for the shared world-space edge, so the endpoint
+     * on one block is exactly the endpoint on its neighbor.
+     */
+    private static void addCrackEdgePorts(List<CrackPoint> ports, BlockRecord record, int edge) {
+        int boundaryX;
+        int boundaryZ;
+        boolean verticalEdge;
+        switch (edge) {
+            case 0 -> {
+                boundaryX = record.x;
+                boundaryZ = record.z;
+                verticalEdge = true;
+            }
+            case 1 -> {
+                boundaryX = record.x + 1;
+                boundaryZ = record.z;
+                verticalEdge = true;
+            }
+            case 2 -> {
+                boundaryX = record.x;
+                boundaryZ = record.z;
+                verticalEdge = false;
+            }
+            default -> {
+                boundaryX = record.x;
+                boundaryZ = record.z + 1;
+                verticalEdge = false;
+            }
+        }
+
+        long edgeKey = ((long) boundaryX * 0x9E3779B97F4A7C15L)
+                ^ ((long) boundaryZ * 0xC2B2AE3D27D4EB4FL)
+                ^ (verticalEdge ? 0x165667B19E3779F9L : 0x85EBCA77C2B2AE63L);
+        Random edgeRandom = new Random(mixCrackSeed(edgeKey));
+        int count = edgeRandom.nextFloat() < 0.82F ? 1 : 0;
+        if (edgeRandom.nextFloat() < 0.14F) count++;
+        if (count == 2) {
+            float first = 0.16F + edgeRandom.nextFloat() * 0.68F;
+            float second = 0.16F + edgeRandom.nextFloat() * 0.68F;
+            if (Math.abs(first - second) < 0.18F) {
+                second = first < 0.58F ? first + 0.22F : first - 0.22F;
+            }
+            addCrackPort(ports, edge, Math.min(first, second));
+            addCrackPort(ports, edge, Math.max(first, second));
+        } else if (count == 1) {
+            addCrackPort(ports, edge, 0.16F + edgeRandom.nextFloat() * 0.68F);
+        }
+    }
+
+    private static void addCrackPort(List<CrackPoint> ports, int edge, float alongEdge) {
+        switch (edge) {
+            case 0 -> ports.add(new CrackPoint(0.0F, alongEdge));
+            case 1 -> ports.add(new CrackPoint(1.0F, alongEdge));
+            case 2 -> ports.add(new CrackPoint(alongEdge, 0.0F));
+            default -> ports.add(new CrackPoint(alongEdge, 1.0F));
+        }
+    }
+
+    private static CrackPoint randomBoundaryPoint(Random random) {
+        float along = 0.12F + random.nextFloat() * 0.76F;
+        return switch (random.nextInt(4)) {
+            case 0 -> new CrackPoint(0.0F, along);
+            case 1 -> new CrackPoint(1.0F, along);
+            case 2 -> new CrackPoint(along, 0.0F);
+            default -> new CrackPoint(along, 1.0F);
+        };
+    }
+
+    private static CrackPath createWavyCrackPath(CrackPoint start, CrackPoint end,
+                                                  Random random, float halfWidth,
+                                                  float lipHeight) {
+        List<CrackPoint> points = new ArrayList<>(6);
+        points.add(start);
+        float dx = end.x - start.x;
+        float dz = end.z - start.z;
+        float length = (float) Math.sqrt(dx * dx + dz * dz);
+        if (length > 1.0E-4F) {
+            float normalX = -dz / length;
+            float normalZ = dx / length;
+            int bends = 2 + random.nextInt(3);
+            for (int i = 1; i <= bends; i++) {
+                float t = i / (float) (bends + 1);
+                float jitter = (random.nextFloat() - 0.5F) * 0.22F;
+                float x = start.x + dx * t + normalX * jitter;
+                float z = start.z + dz * t + normalZ * jitter;
+                points.add(new CrackPoint(
+                        Math.max(0.045F, Math.min(0.955F, x)),
+                        Math.max(0.045F, Math.min(0.955F, z))
+                ));
+            }
+        }
+        points.add(end);
+        return new CrackPath(points, halfWidth, lipHeight);
+    }
+
+    private static void addCrackPath(CrackMeshBuilder builder, BlockRecord record,
+                                     CrackPath path, Random random) {
+        for (int i = 0; i < path.points.size() - 1; i++) {
+            CrackPoint start = path.points.get(i);
+            CrackPoint end = path.points.get(i + 1);
+            float dx = end.x - start.x;
+            float dz = end.z - start.z;
+            float length = (float) Math.sqrt(dx * dx + dz * dz);
+            if (length < 0.025F) continue;
+
+            float normalX = -dz / length;
+            float normalZ = dx / length;
+            float widthA = path.halfWidth * (0.84F + random.nextFloat() * 0.30F);
+            float widthB = path.halfWidth * (0.84F + random.nextFloat() * 0.30F);
+            float lipA = path.lipHeight * (0.74F + random.nextFloat() * 0.42F);
+            float lipB = path.lipHeight * (0.74F + random.nextFloat() * 0.42F);
+
+            // Shared boundary ports taper to a point, which joins the neighboring
+            // block's matching crack without doubled, overlapping trench geometry.
+            if (i == 0 && isCrackBoundaryPoint(start)) {
+                widthA *= 0.16F;
+                lipA *= 0.36F;
+            }
+            if (i == path.points.size() - 2 && isCrackBoundaryPoint(end)) {
+                widthB *= 0.16F;
+                lipB *= 0.36F;
+            }
+
+            float floorScale = 0.16F + random.nextFloat() * 0.08F;
+            float floorA = widthA * floorScale;
+            float floorB = widthB * floorScale;
+            float floorYA = 1.0025F + random.nextFloat() * 0.0020F;
+            float floorYB = 1.0025F + random.nextFloat() * 0.0020F;
+
+            float[] outerLeftA = crackVertex(
+                    start.x + normalX * widthA, 1.0F + lipA,
+                    start.z + normalZ * widthA);
+            float[] outerLeftB = crackVertex(
+                    end.x + normalX * widthB, 1.0F + lipB,
+                    end.z + normalZ * widthB);
+            float[] floorLeftA = crackVertex(
+                    start.x + normalX * floorA, floorYA,
+                    start.z + normalZ * floorA);
+            float[] floorLeftB = crackVertex(
+                    end.x + normalX * floorB, floorYB,
+                    end.z + normalZ * floorB);
+            float[] floorRightA = crackVertex(
+                    start.x - normalX * floorA, floorYA,
+                    start.z - normalZ * floorA);
+            float[] floorRightB = crackVertex(
+                    end.x - normalX * floorB, floorYB,
+                    end.z - normalZ * floorB);
+            float[] outerRightA = crackVertex(
+                    start.x - normalX * widthA, 1.0F + lipA,
+                    start.z - normalZ * widthA);
+            float[] outerRightB = crackVertex(
+                    end.x - normalX * widthB, 1.0F + lipB,
+                    end.z - normalZ * widthB);
+
+            float revealLeft = crackQuadReveal(record, start, end, random);
+            float revealFloor = Math.min(1.0F, revealLeft + random.nextFloat() * 0.025F);
+            float revealRight = Math.min(1.0F, revealLeft + random.nextFloat() * 0.025F);
+            int bevelColor = 104 + random.nextInt(45);
+            int floorColor = 15 + random.nextInt(19);
+
+            // The two sloped bevels and the dark recessed floor are separate 3D
+            // quads. Their height difference creates a real trough-shaped mesh.
+            builder.addQuad(outerLeftA, outerLeftB, floorLeftB, floorLeftA,
+                    bevelColor, revealLeft);
+            builder.addQuad(floorLeftA, floorLeftB, floorRightB, floorRightA,
+                    floorColor, revealFloor);
+            builder.addQuad(floorRightA, floorRightB, outerRightB, outerRightA,
+                    bevelColor, revealRight);
+        }
+    }
+
+    private static boolean isCrackBoundaryPoint(CrackPoint point) {
+        return point.x <= 0.001F || point.x >= 0.999F
+                || point.z <= 0.001F || point.z >= 0.999F;
+    }
+
+    private static float[] crackVertex(float x, float y, float z) {
+        return new float[] {x, y, z};
+    }
+
+    private static float crackQuadReveal(BlockRecord record, CrackPoint start,
+                                         CrackPoint end, Random random) {
+        float x = record.x + (start.x + end.x) * 0.5F;
+        float z = record.z + (start.z + end.z) * 0.5F;
+        double dx = x - centerX;
+        double dz = z - centerZ;
+        float radial = (float) (Math.sqrt(dx * dx + dz * dz) / (double) RADIUS);
+        float jitter = (random.nextFloat() - 0.5F) * 0.085F;
+        return Math.max(0.0F, Math.min(1.0F, radial + jitter));
+    }
+
+    private static void renderGroundCracks(PoseStack poseStack,
+                                           MultiBufferSource.BufferSource buffer,
+                                           View camera, float partialTick,
+                                           float dissolveProgress) {
+        float growth = Math.max(0.0F, Math.min(1.0F,
+                (elapsedTicks + partialTick - CRACK_START_TICK) / (float) CRACK_GROW_TICKS));
+        if (growth <= 0.0F && elapsedTicks < CRACK_START_TICK) return;
+
+        VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
+        for (GroundCrack crack : GROUND_CRACKS) {
+            BlockRecord record = crack.record;
+            if (!isInView(record.x + 0.5D, record.y + 1.0D, record.z + 0.5D, camera)) continue;
+            if (dissolveProgress > 0.0F && getDissolveOrder(record) <= dissolveProgress) continue;
+
+            poseStack.pushPose();
+            try {
+                poseStack.translate(
+                        record.x - camera.x,
+                        record.y - camera.y,
+                        record.z - camera.z
+                );
+                Matrix4f matrix = poseStack.last().pose();
+                org.joml.Matrix3f normalMatrix = poseStack.last().normal();
+
+                for (int quad = 0; quad < crack.quadCount; quad++) {
+                    if (crack.reveal[quad] > growth) continue;
+                    emitCrackQuad(consumer, matrix, normalMatrix, crack.sprite,
+                            crack.positions, crack.uvs, quad, crack.colors[quad]);
+                }
+            } finally {
+                poseStack.popPose();
+            }
+        }
+        buffer.endBatch(ROCK_RENDER_TYPE);
+    }
+
+    private static void emitCrackQuad(VertexConsumer consumer,
+                                      Matrix4f matrix,
+                                      org.joml.Matrix3f normalMatrix,
+                                      TextureAtlasSprite sprite,
+                                      float[] positions, float[] uvs,
+                                      int quad, int color) {
+        int p = quad * 12;
+        int t = quad * 8;
+        float ax = positions[p], ay = positions[p + 1], az = positions[p + 2];
+        float bx = positions[p + 3], by = positions[p + 4], bz = positions[p + 5];
+        float cx = positions[p + 6], cy = positions[p + 7], cz = positions[p + 8];
+
+        float ux = bx - ax, uy = by - ay, uz = bz - az;
+        float vx = cx - ax, vy = cy - ay, vz = cz - az;
+        float nx = uy * vz - uz * vy;
+        float ny = uz * vx - ux * vz;
+        float nz = ux * vy - uy * vx;
+        float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (length < 1.0E-5F) return;
+        nx /= length;
+        ny /= length;
+        nz /= length;
+
+        float diffuse = Math.max(0.0F, nx * -0.38F + ny * 0.84F + nz * 0.38F);
+        int shaded = Math.max(0, Math.min(255,
+                (int) (color * (0.34F + diffuse * 0.66F))));
+
+        emitCrackVertex(consumer, matrix, normalMatrix, sprite,
+                ax, ay, az, uvs[t], uvs[t + 1], shaded, nx, ny, nz);
+        emitCrackVertex(consumer, matrix, normalMatrix, sprite,
+                bx, by, bz, uvs[t + 2], uvs[t + 3], shaded, nx, ny, nz);
+        emitCrackVertex(consumer, matrix, normalMatrix, sprite,
+                cx, cy, cz, uvs[t + 4], uvs[t + 5], shaded, nx, ny, nz);
+        emitCrackVertex(consumer, matrix, normalMatrix, sprite,
+                positions[p + 9], positions[p + 10], positions[p + 11],
+                uvs[t + 6], uvs[t + 7], shaded, nx, ny, nz);
+    }
+
+    private static void emitCrackVertex(VertexConsumer consumer,
+                                        Matrix4f matrix,
+                                        org.joml.Matrix3f normalMatrix,
+                                        TextureAtlasSprite sprite,
+                                        float x, float y, float z,
+                                        float u, float v, int color,
+                                        float nx, float ny, float nz) {
+        consumer.vertex(matrix, x, y, z)
+                .color(color, color, color, 255)
+                .uv(sprite.getU(u), sprite.getV(v))
+                .overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, nx, ny, nz)
+                .endVertex();
+    }
+
+    /**
      * Twenty-two large wall plates/beams, twenty-six medium masonry chunks and
      * fifty-two small sharp chips. Existing size and motion profiles are unchanged.
      */
@@ -1306,6 +1691,106 @@ public final class TimeEraseFractureEffect {
             z = snapshot.z;
             state = snapshot.state;
             packedLight = LevelRenderer.getLightColor(level, new BlockPos(x, y, z));
+        }
+    }
+
+    private static final class CrackPoint {
+        final float x;
+        final float z;
+
+        CrackPoint(float x, float z) {
+            this.x = x;
+            this.z = z;
+        }
+    }
+
+    private static final class CrackPath {
+        final List<CrackPoint> points;
+        final float halfWidth;
+        final float lipHeight;
+
+        CrackPath(List<CrackPoint> points, float halfWidth, float lipHeight) {
+            this.points = points;
+            this.halfWidth = halfWidth;
+            this.lipHeight = lipHeight;
+        }
+    }
+
+    private static final class GroundCrack {
+        final BlockRecord record;
+        final TextureAtlasSprite sprite;
+        final float[] positions;
+        final float[] uvs;
+        final int[] colors;
+        final float[] reveal;
+        final int quadCount;
+
+        GroundCrack(BlockRecord record, TextureAtlasSprite sprite,
+                    float[] positions, float[] uvs, int[] colors,
+                    float[] reveal, int quadCount) {
+            this.record = record;
+            this.sprite = sprite;
+            this.positions = positions;
+            this.uvs = uvs;
+            this.colors = colors;
+            this.reveal = reveal;
+            this.quadCount = quadCount;
+        }
+    }
+
+    /** Primitive-array mesh builder keeps the thousands of cracks lightweight. */
+    private static final class CrackMeshBuilder {
+        float[] positions = new float[384];
+        float[] uvs = new float[256];
+        int[] colors = new int[32];
+        float[] reveal = new float[32];
+        int quadCount;
+
+        void addQuad(float[] a, float[] b, float[] c, float[] d,
+                     int color, float revealAt) {
+            ensureCapacity();
+            int p = quadCount * 12;
+            int t = quadCount * 8;
+            putPoint(positions, p, a);
+            putPoint(positions, p + 3, b);
+            putPoint(positions, p + 6, c);
+            putPoint(positions, p + 9, d);
+            putUv(uvs, t, a);
+            putUv(uvs, t + 2, b);
+            putUv(uvs, t + 4, c);
+            putUv(uvs, t + 6, d);
+            colors[quadCount] = color;
+            reveal[quadCount] = revealAt;
+            quadCount++;
+        }
+
+        private static void putPoint(float[] target, int offset, float[] point) {
+            target[offset] = point[0];
+            target[offset + 1] = point[1];
+            target[offset + 2] = point[2];
+        }
+
+        private static void putUv(float[] target, int offset, float[] point) {
+            target[offset] = Math.max(0.0F, Math.min(1.0F, point[0])) * 16.0F;
+            target[offset + 1] = Math.max(0.0F, Math.min(1.0F, point[2])) * 16.0F;
+        }
+
+        private void ensureCapacity() {
+            if (quadCount * 12 + 12 > positions.length) {
+                positions = Arrays.copyOf(positions, positions.length * 2);
+                uvs = Arrays.copyOf(uvs, uvs.length * 2);
+                colors = Arrays.copyOf(colors, colors.length * 2);
+                reveal = Arrays.copyOf(reveal, reveal.length * 2);
+            }
+        }
+
+        GroundCrack build(BlockRecord record, TextureAtlasSprite sprite) {
+            return new GroundCrack(record, sprite,
+                    Arrays.copyOf(positions, quadCount * 12),
+                    Arrays.copyOf(uvs, quadCount * 8),
+                    Arrays.copyOf(colors, quadCount),
+                    Arrays.copyOf(reveal, quadCount),
+                    quadCount);
         }
     }
 

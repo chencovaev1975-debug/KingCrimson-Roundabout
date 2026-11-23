@@ -186,7 +186,8 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
                                     int red, int green, int blue, float alpha,
                                     float normalX, float normalZ) {
         consumer.vertex(matrix, x, y, z)
-                .color(red, green, blue, Math.max(0.0F, Math.min(255.0F, alpha)))
+                .color(red / 255.0F, green / 255.0F, blue / 255.0F,
+                        Math.max(0.0F, Math.min(255.0F, alpha)) / 255.0F)
                 .uv(u, v)
                 .overlayCoords(OverlayTexture.NO_OVERLAY)
                 .uv2(FULL_BRIGHT)

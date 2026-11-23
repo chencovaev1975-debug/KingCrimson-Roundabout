@@ -64,8 +64,8 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_EMERGENCE_TICKS = 7;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
     private static final double SLASH_DELAY_SECONDS = 1.08D;
-    private static final double SLASH_TRAVEL_SECONDS = 0.45D;
-    private static final double SLASH_FADE_SECONDS = 0.10D;
+    private static final double SLASH_TRAVEL_SECONDS = 0.16D;
+    private static final double SLASH_FADE_SECONDS = 0.06D;
     private static final int FUTURE_LEAD_TICKS = 25;
     private static final int BIG_ROCK_COUNT = 22;
     private static final int MEDIUM_ROCK_COUNT = 26;
@@ -395,8 +395,8 @@ public final class TimeEraseFractureEffect {
      * fifty-two small sharp chips. Existing size and motion profiles are unchanged.
      */
     /**
-     * Medium debris forms the inner ring (2.5–3.5 blocks), large slabs sit
-     * immediately behind it (5–6 blocks), and small chips are sampled near
+     * Medium debris forms the inner ring (5–7 blocks), large slabs sit
+     * farther out (8.5–11.5 blocks), and small chips are sampled near
      * those chosen anchors as secondary fragments.
      */
     private static void createRocks() {
@@ -416,7 +416,7 @@ public final class TimeEraseFractureEffect {
         // The medium ring is deliberately selected first so it owns the closest
         // ground positions around the player.
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchorWithReuse(random, usedAnchors, 0.95D, 2.5D, 3.5D);
+            BlockRecord anchor = pickAnchorWithReuse(random, usedAnchors, 1.35D, 5.0D, 7.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             primaryAnchors.add(anchor);
@@ -429,7 +429,7 @@ public final class TimeEraseFractureEffect {
 
         // The large plates sit just beyond the medium ring.
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchorWithReuse(random, usedAnchors, 1.45D, 5.0D, 6.0D);
+            BlockRecord anchor = pickAnchorWithReuse(random, usedAnchors, 2.0D, 8.5D, 11.5D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             primaryAnchors.add(anchor);
@@ -474,7 +474,7 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Select a secondary chip anchor 0.65–2.35 blocks from a medium or large
+     * Select a secondary chip anchor 0.9–2.8 blocks from a medium or large
      * anchor. Chips are also spaced from one another to avoid a separate heap.
      */
     private static BlockRecord pickSecondaryAnchor(Random random,
@@ -496,8 +496,8 @@ public final class TimeEraseFractureEffect {
                     double dz = candidate.z - primary.z;
                     nearestPrimarySquared = Math.min(nearestPrimarySquared, dx * dx + dz * dz);
                 }
-                if (nearestPrimarySquared < 0.65D * 0.65D
-                        || nearestPrimarySquared > 2.35D * 2.35D) {
+                if (nearestPrimarySquared < 0.9D * 0.9D
+                        || nearestPrimarySquared > 2.8D * 2.8D) {
                     continue;
                 }
 
@@ -523,7 +523,7 @@ public final class TimeEraseFractureEffect {
                 double dx = candidate.x - primary.x;
                 double dz = candidate.z - primary.z;
                 double distanceSquared = dx * dx + dz * dz;
-                if (distanceSquared >= 0.65D * 0.65D && distanceSquared <= 2.35D * 2.35D) {
+                if (distanceSquared >= 0.9D * 0.9D && distanceSquared <= 2.8D * 2.8D) {
                     return candidate;
                 }
             }

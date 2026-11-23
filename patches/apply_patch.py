@@ -40,7 +40,7 @@ replace_once(
     """        if (ClientUtil.isUnderRTZ() && ClientUtil.rtzTicks >= 4 && ClientUtil.rtzTicks < ClientUtil.RTZ_DURATION - 4) {
             ci.cancel();
         }
-        if (ClientUtil.renderTimeErase()) {
+        if (ClientUtil.isUsingTimeErase) {
             ci.cancel();
         }
     }""",
@@ -51,8 +51,20 @@ replace_once(
 replace_once(
     renderer,
     "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
-    "if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {",
+    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
     "hide clouds during the Time Erase skybox fade"
+)
+
+# Restore the End sky on the same frame the Time Erase ability is released.
+# renderTimeErase() remains true for the vanilla fade counter, but should no
+# longer keep the environment hidden once the ability itself has ended.
+replace_once(
+    renderer,
+    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
+        if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {""",
+    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
+        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {""",
+    "restore End sky immediately after Time Erase ends"
 )
 
 # Muted charcoal tint for the six Time Erase skybox faces.

@@ -119,6 +119,34 @@ texture_root = root / "common/src/main/resources/assets/roundabout/textures/misc
 write_rgba_png(texture_root / "flat_white.png", 1, 1,
                lambda x, y: (255, 255, 255, 255))
 
+def diavolo_fire_pixel(x, y):
+    import math
+    u = x / 127.0
+    rise = 1.0 - y / 127.0
+    alpha = 0
+    for index in range(9):
+        base = (index + 0.5) / 9.0
+        center = base + math.sin(rise * 6.4 + index * 1.73) * 0.026
+        center += math.sin(rise * 13.0 + index * 0.91) * 0.009
+        width = 0.027 + (1.0 - rise) * 0.018
+        distance = abs(u - center)
+        body = max(0.0, 1.0 - distance / width) ** 1.35
+        root_fade = min(1.0, rise * 5.0)
+        tip_fade = min(1.0, (1.0 - rise) * 5.0)
+        tongue = body * root_fade * tip_fade
+        alpha = max(alpha, int(238 * tongue))
+
+    # A few finer licks fill gaps without turning the plane into a solid sheet.
+    for index in range(5):
+        center = 0.10 + index * 0.20 + math.sin(rise * 9.0 + index * 2.0) * 0.024
+        distance = abs(u - center)
+        filament = max(0.0, 1.0 - distance / 0.010)
+        filament *= min(1.0, rise * 5.5) * min(1.0, (1.0 - rise) * 4.5)
+        alpha = max(alpha, int(150 * filament))
+    return 255, 255, 255, alpha
+
+write_rgba_png(texture_root / "diavolo_aura.png", 128, 128, diavolo_fire_pixel)
+
 # Start the effect on the local client's Time Erase rising edge, and let its own
 # incremental client snapshot timer advance independently of server-side world data.
 replace_once(

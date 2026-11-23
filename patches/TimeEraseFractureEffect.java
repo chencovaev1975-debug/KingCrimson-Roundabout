@@ -396,7 +396,7 @@ public final class TimeEraseFractureEffect {
 
         for (BlockRecord record : BLOCKS) {
             if (!isInView(record.x + 0.5D, record.y + 0.5D, record.z + 0.5D, camera)) continue;
-            if (getDissolveOrder(record) < dissolveProgress) continue;
+            if (dissolveProgress > 0.0F && getDissolveOrder(record) <= dissolveProgress) continue;
 
             poseStack.pushPose();
             try {

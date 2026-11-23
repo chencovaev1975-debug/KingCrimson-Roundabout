@@ -119,29 +119,6 @@ texture_root = root / "common/src/main/resources/assets/roundabout/textures/misc
 write_rgba_png(texture_root / "flat_white.png", 1, 1,
                lambda x, y: (255, 255, 255, 255))
 
-def aura_pixel(x, y):
-    import math
-    vertical = y / 63.0
-    alpha = 0
-    for index in range(5):
-        base = 5.0 + index * 13.5
-        center = base + math.sin(vertical * 8.5 + index * 1.63) * 3.2
-        width = 2.2 + 1.6 * math.sin(vertical * math.pi)
-        distance = abs(x - center)
-        if distance < width:
-            flame_alpha = int(230 * (1.0 - distance / width) ** 0.7
-                              * (0.30 + 0.70 * vertical))
-            alpha = max(alpha, flame_alpha)
-    # A few fine wisps break up the broad tongues into flowing energy streaks.
-    for index in range(3):
-        center = 16.0 + index * 17.0 + math.sin(vertical * 13.0 + index) * 5.0
-        distance = abs(x - center)
-        if distance < 1.2:
-            alpha = max(alpha, int(125 * (1.0 - distance / 1.2) * vertical))
-    return 255, 255, 255, alpha
-
-write_rgba_png(texture_root / "diavolo_aura.png", 64, 64, aura_pixel)
-
 # Start the effect on the local client's Time Erase rising edge, and let its own
 # incremental client snapshot timer advance independently of server-side world data.
 replace_once(
@@ -304,9 +281,9 @@ if "roundabout$renderTimeEraseSlash" not in hud_source:
     if close < 0:
         raise SystemExit("HUD slash injection: class closing brace not found")
     hud_inject = """
-    @Inject(method = "render", at = @At("TAIL"))
+    @Inject(method = "render", at = @At("TAIL"), require = 1)
     private void roundabout$renderTimeEraseSlash(GuiGraphics graphics, float partialTick, CallbackInfo ci) {
-        if (this.minecraft.player != null) {
+        if (this.minecraft.player != null && !this.minecraft.options.hideGui) {
             TimeEraseSlashRenderer.render(graphics, partialTick, this.screenWidth, this.screenHeight);
         }
     }

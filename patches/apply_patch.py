@@ -269,15 +269,15 @@ import net.minecraft.sounds.SoundSource;""",
 )
 update_source_once(
     sound_manager_mixin,
-    """    public void roundabout$play(SoundInstance $0, CallbackInfo ci) {
+    """    public void roundabout$play(SoundInstance $$0, CallbackInfo ci) {
         if (Minecraft.getInstance().player != null){""",
-    """    public void roundabout$play(SoundInstance $0, CallbackInfo ci) {
-        SoundInstance routed = TimeEraseFractureEffect.routeTimeEraseSound($0);
+    """    public void roundabout$play(SoundInstance $$0, CallbackInfo ci) {
+        SoundInstance routed = TimeEraseFractureEffect.routeTimeEraseSound($$0);
         if (routed == null) {
             ci.cancel();
             return;
         }
-        if (routed != $0) {
+        if (routed != $$0) {
             ci.cancel();
             Minecraft.getInstance().getSoundManager().play(routed);
             return;

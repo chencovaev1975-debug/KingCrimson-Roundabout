@@ -205,17 +205,32 @@ update_source_once(
     "add Diavolo theme sound definition"
 )
 
-# The binary is uploaded to the add-on repository at patches/assets/diavolo_theme.ogg.
-# During the interim code-only build, keep the build green and report the missing asset.
-audio_asset = Path(__file__).with_name("assets") / "diavolo_theme.ogg"
-audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
+# The widened crack texture is required. The optional audio is copied when uploaded;
+# the renderer has its 4.20-second playback trigger already wired to the registered event.
+assets_dir = Path(__file__).with_name("assets")
+crack_asset = assets_dir / "time_erase_cracks.png"
+if not crack_asset.is_file():
+    raise SystemExit("Missing required crack texture: patches/assets/time_erase_cracks.png")
+
+crack_bytes = crack_asset.read_bytes()
+if crack_bytes[:8] != bytes.fromhex("89504e470d0a1a0a"):
+    raise SystemExit("Time Erase crack texture is not a valid PNG")
+crack_target = root / "common/src/main/resources/assets/roundabout/textures/misc/time_erase_cracks.png"
+crack_target.parent.mkdir(parents=True, exist_ok=True)
+crack_target.write_bytes(crack_bytes)
+
+audio_asset = assets_dir / "diavolo_theme.ogg"
 if audio_asset.is_file():
-    audio_target.parent.mkdir(parents=True, exist_ok=True)
-    audio_target.write_bytes(audio_asset.read_bytes())
-    if not audio_target.read_bytes().startswith(b"OggS"):
+    audio_bytes = audio_asset.read_bytes()
+    if not audio_bytes.startswith(b"OggS"):
         raise SystemExit("Diavolo theme asset is not a valid Ogg container")
-    print("Installed local Diavolo theme sound asset.")
+    audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
+    audio_target.parent.mkdir(parents=True, exist_ok=True)
+    audio_target.write_bytes(audio_bytes)
+    print("Installed Diavolo theme audio asset.")
 else:
-    print("NOTE: patches/assets/diavolo_theme.ogg is not uploaded yet; sound asset copy skipped.")
+    print("NOTE: missing patches/assets/diavolo_theme.ogg; Diavolo theme will be silent until uploaded.")
+
+print("Installed the widened fracture texture and the optimized 13-boulder Time Erase scene.")
 
 print("Applied: native Time Erase skybox plus local fracture wave, non-rotating stone chips, and a brief vertical shake.")

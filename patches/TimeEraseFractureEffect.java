@@ -22,6 +22,9 @@ import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.WaterAnimal;
+import net.minecraft.world.entity.animal.AbstractFish;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -60,12 +63,12 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_FADE_TICKS = 10;
     private static final int ROCK_EMERGENCE_TICKS = 7;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
-    private static final int PURPLE_FLASH_START_TICK = 21;
-    private static final int PURPLE_FLASH_DURATION_TICKS = 4;
-    private static final int BIG_ROCK_COUNT = 10;
-    private static final int MEDIUM_ROCK_COUNT = 12;
-    private static final int SMALL_ROCK_COUNT = 25;
-    private static final int PURPLE_BLOCK_ALPHA = 165;
+    private static final int SLASH_DRAW_TICKS = 3;
+    private static final int SLASH_FADE_TICKS = 2;
+    private static final int FUTURE_LEAD_TICKS = 25;
+    private static final int BIG_ROCK_COUNT = 22;
+    private static final int MEDIUM_ROCK_COUNT = 26;
+    private static final int SMALL_ROCK_COUNT = 52;
 
     private static final int[][] NEIGHBORS = {
             {1, 0, 0}, {-1, 0, 0},
@@ -78,30 +81,13 @@ public final class TimeEraseFractureEffect {
     };
     private static final RenderType ROCK_RENDER_TYPE =
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
-    private static final float[][][] GLITCH_BLOCK_FACES = {
-            {{0,0,0}, {0,1,0}, {1,1,0}, {1,0,0}},
-            {{1,0,1}, {1,1,1}, {0,1,1}, {0,0,1}},
-            {{0,0,1}, {0,1,1}, {0,1,0}, {0,0,0}},
-            {{1,0,0}, {1,1,0}, {1,1,1}, {1,0,1}},
-            {{0,0,1}, {0,0,0}, {1,0,0}, {1,0,1}},
-            {{0,1,0}, {0,1,1}, {1,1,1}, {1,1,0}}
-    };
-    private static final float[][] GLITCH_BLOCK_NORMALS = {
-            {0,0,-1}, {0,0,1}, {-1,0,0},
-            {1,0,0}, {0,-1,0}, {0,1,0}
-    };
-    private static final float[][] GLITCH_QUAD_UV = {
-            {0,16}, {0,0}, {16,0}, {16,16}
-    };
-
-    private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
+remove old glitch quad data    private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
             new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
     // Generated meshes are immutable after creation and reused by seed.
-    private static final Map<Long, RockMesh> ROCK_MESH_CACHE = new HashMap<>(64);
-    private static final Map<BlockState, TextureAtlasSprite> BLOCK_SPRITE_CACHE = new HashMap<>(128);
+    private static final Map<Long, RockMesh> ROCK_MESH_CACHE = new HashMap<>(128);
 
     private static boolean previousAbilityActive;
     private static boolean effectActive;
@@ -183,7 +169,6 @@ public final class TimeEraseFractureEffect {
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
-        BLOCK_SPRITE_CACHE.clear();
         capturedLevel = level;
         centerX = player.getX();
         centerY = player.getY();
@@ -207,7 +192,6 @@ public final class TimeEraseFractureEffect {
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
-        BLOCK_SPRITE_CACHE.clear();
         capturedLevel = null;
         previousAbilityActive = false;
         effectActive = false;
@@ -358,9 +342,6 @@ public final class TimeEraseFractureEffect {
             // Keep opaque upper terrain over the fragments while they rise.
             // Depth testing hides each piece until it actually breaks free.
             renderCapturedScene(poseStack, buffer, view);
-            if (isPurpleBlockFlashActive(partialTick)) {
-                renderPurpleBlockFlash(poseStack, buffer, view);
-            }
             buffer.endBatch();
 
             if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
@@ -399,76 +380,9 @@ public final class TimeEraseFractureEffect {
         }
     }
 
-    private static boolean isPurpleBlockFlashActive(float partialTick) {
-        if (!effectActive) return false;
-        float age = elapsedTicks + partialTick - PURPLE_FLASH_START_TICK;
-        return age >= 0.0F && age < PURPLE_FLASH_DURATION_TICKS;
-    }
-
     /**
-     * Paint every captured block with a vivid translucent violet shell.
-     * All six faces are emitted, so the effect wraps around the full scene.
-     */
-    private static void renderPurpleBlockFlash(PoseStack poseStack,
-                                               MultiBufferSource.BufferSource buffer,
-                                               View camera) {
-        Minecraft minecraft = Minecraft.getInstance();
-        VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
-
-        for (BlockRecord record : BLOCKS) {
-            TextureAtlasSprite sprite = BLOCK_SPRITE_CACHE.computeIfAbsent(
-                    record.state,
-                    state -> minecraft.getBlockRenderer().getBlockModel(state).getParticleIcon()
-            );
-
-            poseStack.pushPose();
-            try {
-                poseStack.translate(
-                        record.x - camera.x,
-                        record.y - camera.y,
-                        record.z - camera.z
-                );
-                Matrix4f matrix = poseStack.last().pose();
-                org.joml.Matrix3f normalMatrix = poseStack.last().normal();
-                for (int face = 0; face < GLITCH_BLOCK_FACES.length; face++) {
-                    float[] normal = GLITCH_BLOCK_NORMALS[face];
-                    emitPurpleBlockFace(
-                            consumer, matrix, normalMatrix, sprite,
-                            GLITCH_BLOCK_FACES[face], normal[0], normal[1], normal[2]
-                    );
-                }
-            } finally {
-                poseStack.popPose();
-            }
-        }
-    }
-
-    private static void emitPurpleBlockFace(VertexConsumer consumer,
-                                             Matrix4f matrix,
-                                             org.joml.Matrix3f normalMatrix,
-                                             TextureAtlasSprite sprite,
-                                             float[][] face,
-                                             float nx, float ny, float nz) {
-        for (int i = 0; i < 4; i++) {
-            float[] point = face[i];
-            float[] uv = GLITCH_QUAD_UV[i];
-            float offset = 0.0015F;
-            consumer.vertex(matrix,
-                            point[0] + nx * offset,
-                            point[1] + ny * offset,
-                            point[2] + nz * offset)
-                    .color(155, 45, 255, PURPLE_BLOCK_ALPHA)
-                    .uv(sprite.getU(uv[0]), sprite.getV(uv[1]))
-                    .overlayCoords(OverlayTexture.NO_OVERLAY)
-                    .uv2(LightTexture.FULL_BRIGHT)
-                    .normal(normalMatrix, nx, ny, nz)
-                    .endVertex();
-        }
-    }
-
-    /**
-     * Ten large wall plates/beams, twelve medium masonry chunks and twenty-five
-     * small sharp chips. Each size tier uses its own radial anchor band.
+     * Twenty-two large wall plates/beams, twenty-six medium masonry chunks and
+     * fifty-two small sharp chips. Existing size and motion profiles are unchanged.
      */
     private static void createRocks() {
         ROCKS.clear();
@@ -890,6 +804,103 @@ public final class TimeEraseFractureEffect {
                 .uv2(LightTexture.FULL_BRIGHT)
                 .normal(normalMatrix, nx, ny, nz)
                 .endVertex();
+    }
+
+    /** Returns the bottom-to-top slash reveal, or -1 when it is inactive. */
+    public static float getSlashRevealProgress(float partialTick) {
+        if (!effectActive) return -1.0F;
+        float age = elapsedTicks + partialTick;
+        float total = SLASH_DRAW_TICKS + SLASH_FADE_TICKS;
+        if (age < 0.0F || age >= total) return -1.0F;
+        return Math.min(1.0F, age / (float) SLASH_DRAW_TICKS);
+    }
+
+    /** The slash stays full-strength while drawing, then thins and fades over two ticks. */
+    public static float getSlashFade(float partialTick) {
+        if (!effectActive) return 0.0F;
+        float age = elapsedTicks + partialTick;
+        if (age < 0.0F || age >= SLASH_DRAW_TICKS + SLASH_FADE_TICKS) return 0.0F;
+        if (age <= SLASH_DRAW_TICKS) return 1.0F;
+        return Math.max(0.0F, 1.0F - (age - SLASH_DRAW_TICKS) / (float) SLASH_FADE_TICKS);
+    }
+
+    /**
+     * Predicts a 1.25-second visual future for a living entity. This is strictly
+     * client-side rendering: the real entity, its hitbox and server movement
+     * remain authoritative and are never teleported or overwritten.
+     */
+    public static Vec3 getPredictedFuturePosition(LivingEntity target, float partialTick) {
+        Minecraft minecraft = Minecraft.getInstance();
+        LocalPlayer observer = minecraft.player;
+        if (!ClientUtil.isUsingTimeErase || observer == null || target == null
+                || target == observer || !target.isAlive()
+                || target.level() != observer.level()
+                || target instanceof AbstractFish || target instanceof WaterAnimal) {
+            return null;
+        }
+
+        Vec3 origin = target.getPosition(partialTick);
+        Vec3 toTarget = origin.subtract(observer.getEyePosition(partialTick));
+        double distanceSquared = toTarget.lengthSqr();
+        if (distanceSquared < 0.01D || distanceSquared > 625.0D) return null;
+
+        Vec3 view = observer.getViewVector(partialTick).normalize();
+        Vec3 directionToTarget = toTarget.scale(1.0D / Math.sqrt(distanceSquared));
+        // A forward cone approximating the player's visible field of view.
+        if (view.dot(directionToTarget) < 0.12D) return null;
+
+        Vec3 movement = target.getDeltaMovement();
+        Vec3 horizontalMovement = new Vec3(movement.x, 0.0D, movement.z);
+        double speed = horizontalMovement.length();
+        Vec3 direction;
+        if (speed > 0.015D) {
+            direction = horizontalMovement.scale(1.0D / speed);
+        } else {
+            Vec3 gaze = target.getViewVector(partialTick);
+            Vec3 horizontalGaze = new Vec3(gaze.x, 0.0D, gaze.z);
+            double gazeLength = horizontalGaze.length();
+            if (gazeLength < 1.0E-4D) return null;
+            direction = horizontalGaze.scale(1.0D / gazeLength);
+        }
+
+        double leadDistance = speed > 0.015D
+                ? Math.max(0.75D, Math.min(5.5D, speed * FUTURE_LEAD_TICKS))
+                : 1.10D;
+        Vec3 predicted = origin.add(direction.scale(leadDistance));
+
+        if (target.onGround()) {
+            int groundY = target.level().getHeight(
+                    Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                    net.minecraft.util.Mth.floor(predicted.x),
+                    net.minecraft.util.Mth.floor(predicted.z)
+            );
+            if (Math.abs(groundY - origin.y) <= 3.0D) {
+                predicted = new Vec3(predicted.x, groundY, predicted.z);
+            }
+        } else {
+            double verticalLead = Math.max(-2.0D, Math.min(2.5D, movement.y * FUTURE_LEAD_TICKS));
+            predicted = new Vec3(predicted.x, origin.y + verticalLead, predicted.z);
+        }
+
+        // Do not place the hologram inside a wall. Back the lead off until the
+        // predicted entity box has a clear position, preserving the same path.
+        for (int attempt = 0; attempt < 10; attempt++) {
+            Vec3 offset = predicted.subtract(origin);
+            if (target.level().noCollision(target, target.getBoundingBox().move(offset))) {
+                return predicted;
+            }
+            leadDistance *= 0.78D;
+            predicted = origin.add(direction.scale(leadDistance));
+            if (target.onGround()) {
+                int groundY = target.level().getHeight(
+                        Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                        net.minecraft.util.Mth.floor(predicted.x),
+                        net.minecraft.util.Mth.floor(predicted.z)
+                );
+                predicted = new Vec3(predicted.x, groundY, predicted.z);
+            }
+        }
+        return origin;
     }
 
     public static void applyCameraShake(PoseStack poseStack, float partialTick) {

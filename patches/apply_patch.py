@@ -47,6 +47,19 @@ replace_once(
     "hide normal world chunks during Time Erase"
 )
 
+# Never render Roundabout's native red projection for StandEntity models during Time Erase.
+# The matching future-image layer also excludes StandEntity, preventing a red duplicate
+# of King Crimson while retaining projections of ordinary living entities.
+replace_once(
+    renderer,
+    """                    if (entity instanceof LivingEntity lv){
+                    Player pl = ClientUtil.getPlayer();""",
+    """                    if (entity instanceof LivingEntity lv
+                            && !(entity instanceof net.hydra.jojomod.entity.stand.StandEntity)){
+                    Player pl = ClientUtil.getPlayer();""",
+    "exclude StandEntity from native Time Erase red projections"
+)
+
 # Let the native Roundabout six-face skybox remain visible and keep clouds out of it.
 replace_once(
     renderer,

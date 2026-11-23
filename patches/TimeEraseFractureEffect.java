@@ -464,10 +464,15 @@ public final class TimeEraseFractureEffect {
         float velocityZ = directionZ * horizontalSpeed
                 + (random.nextFloat() - 0.5F) * 0.09F;
         float velocityY = verticalSpeed;
-        // Seat the lowest vertex directly on the terrain surface. Large
-        // diamonds use a deeper bottom point than the bevelled fragments.
-        float baseOffset = beveledShape ? 0.55F : 0.84F;
-        float startY = anchor.y + scale * baseOffset + 0.025F;
+        RockMesh mesh = createRockMesh(random, beveledShape);
+
+        // Calculate the exact lowest mesh point so every fragment starts with
+        // its bottom touching the terrain, regardless of its random shape.
+        float lowestVertexY = 0.0F;
+        for (float[] vertex : mesh.vertices) {
+            lowestVertexY = Math.min(lowestVertexY, vertex[1]);
+        }
+        float startY = anchor.y - lowestVertexY * scale + 0.025F;
 
         ROCKS.add(new Rock(
                 anchor.x + 0.5F,
@@ -483,7 +488,7 @@ public final class TimeEraseFractureEffect {
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.35F + random.nextFloat() * 0.55F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.30F + random.nextFloat() * 0.45F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.30F + random.nextFloat() * 0.45F),
-                createRockMesh(random, beveledShape)
+                mesh
         ));
     }
 

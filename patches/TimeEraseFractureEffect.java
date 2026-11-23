@@ -343,7 +343,8 @@ public final class TimeEraseFractureEffect {
             addRock(anchor, random,
                     1.45F + random.nextFloat() * 0.80F,
                     0.14F + random.nextFloat() * 0.10F,
-                    0.23F + random.nextFloat() * 0.13F);
+                    0.23F + random.nextFloat() * 0.13F,
+                    false);
         }
 
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
@@ -353,7 +354,8 @@ public final class TimeEraseFractureEffect {
             addRock(anchor, random,
                     0.62F + random.nextFloat() * 0.16F,
                     0.15F + random.nextFloat() * 0.09F,
-                    0.27F + random.nextFloat() * 0.12F);
+                    0.27F + random.nextFloat() * 0.12F,
+                    true);
         }
 
         for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
@@ -363,7 +365,8 @@ public final class TimeEraseFractureEffect {
             addRock(anchor, random,
                     0.29F + random.nextFloat() * 0.10F,
                     0.17F + random.nextFloat() * 0.09F,
-                    0.30F + random.nextFloat() * 0.12F);
+                    0.30F + random.nextFloat() * 0.12F,
+                    true);
         }
     }
 
@@ -397,7 +400,8 @@ public final class TimeEraseFractureEffect {
     }
 
     private static void addRock(BlockRecord anchor, Random random,
-                                float scale, float horizontalSpeed, float verticalSpeed) {
+                                float scale, float horizontalSpeed, float verticalSpeed,
+                                boolean beveledShape) {
         double dx = anchor.x + 0.5D - centerX;
         double dz = anchor.z + 0.5D - centerZ;
         double length = Math.sqrt(dx * dx + dz * dz);
@@ -423,16 +427,50 @@ public final class TimeEraseFractureEffect {
                 (random.nextBoolean() ? 1.0F : -1.0F) * (1.0F + random.nextFloat() * 2.0F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.8F + random.nextFloat() * 1.8F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.7F + random.nextFloat() * 1.5F),
-                createRockMesh(random)
+                createRockMesh(random, beveledShape)
         ));
     }
 
     /**
-     * Eight-vertex angular polyhedron: an uneven six-point belt joined to
-     * offset top and bottom peaks. The triangles create a visibly faceted,
-     * non-cubic rhombus/shard silhouette instead of scaled block cubes.
+     * Large rocks use an uneven diamond/rhombus polyhedron. The medium and
+     * small pieces use a chipped, bevelled block silhouette: squarer, but with
+     * slanted faces and irregular corners rather than a plain cube.
      */
-    private static RockMesh createRockMesh(Random random) {
+    private static RockMesh createRockMesh(Random random, boolean beveledShape) {
+        if (beveledShape) {
+            float[][] vertices = new float[8][3];
+            for (int i = 0; i < 4; i++) {
+                float angle = (float) (Math.PI / 4.0D) + i * ((float) Math.PI / 2.0F);
+                float topRadiusX = 0.43F + random.nextFloat() * 0.12F;
+                float topRadiusZ = 0.42F + random.nextFloat() * 0.13F;
+                float bottomRadiusX = 0.49F + random.nextFloat() * 0.10F;
+                float bottomRadiusZ = 0.47F + random.nextFloat() * 0.12F;
+                vertices[i] = new float[] {
+                        (float) Math.cos(angle) * topRadiusX,
+                        0.27F + (random.nextFloat() - 0.5F) * 0.16F,
+                        (float) Math.sin(angle) * topRadiusZ
+                };
+                vertices[i + 4] = new float[] {
+                        (float) Math.cos(angle + 0.10F) * bottomRadiusX,
+                        -0.34F - random.nextFloat() * 0.13F,
+                        (float) Math.sin(angle + 0.10F) * bottomRadiusZ
+                };
+            }
+
+            int[][] faces = new int[12][3];
+            faces[0] = new int[] {0, 1, 2};
+            faces[1] = new int[] {0, 2, 3};
+            faces[2] = new int[] {4, 6, 5};
+            faces[3] = new int[] {4, 7, 6};
+            int face = 4;
+            for (int i = 0; i < 4; i++) {
+                int next = (i + 1) % 4;
+                faces[face++] = new int[] {i, i + 4, next + 4};
+                faces[face++] = new int[] {i, next + 4, next};
+            }
+            return new RockMesh(vertices, faces);
+        }
+
         float[][] vertices = new float[8][3];
         vertices[0] = new float[] {
                 (random.nextFloat() - 0.5F) * 0.22F,

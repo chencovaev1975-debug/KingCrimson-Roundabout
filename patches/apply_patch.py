@@ -253,14 +253,21 @@ import net.hydra.jojomod.client.models.layers.TimeEraseAuraLayer;
 import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;""",
     "import the Time Erase player aura and future render layers"
 )
-update_source_once(
+def insert_line_after_unique(path, marker, line_to_insert, label):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    matches = [i for i, line in enumerate(lines) if marker in line]
+    if len(matches) != 1:
+        raise SystemExit(f"{label}: expected one line marker, found {len(matches)}")
+    lines.insert(matches[0] + 1, line_to_insert)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+insert_line_after_unique(
     living_renderer,
-    """        this.addLayer(new FrozenLayer<>($0, ((LivingEntityRenderer)(Object)this)));""",
-    """        this.addLayer(new FrozenLayer<>($0, ((LivingEntityRenderer)(Object)this)));
-        this.addLayer(new TimeEraseAuraLayer<>(this));
-        this.addLayer(new TimeEraseFutureLayer<>(this));""",
+    "this.addLayer(new FrozenLayer<>",
+    "        this.addLayer(new TimeEraseAuraLayer<>(this));\n        this.addLayer(new TimeEraseFutureLayer<>(this));",
     "attach the aura and future hologram to all living renderers"
 )
+
 update_source_once(
     living_renderer,
     """    private void roundabout$applyInvisibilityFade(T entity, float entityYaw, float partialTicks, PoseStack poseStack, MultiBufferSource buffer, int packedLight, CallbackInfo ci) {

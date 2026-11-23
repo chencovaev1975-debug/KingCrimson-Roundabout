@@ -519,60 +519,137 @@ public final class TimeEraseFractureEffect {
     }
 
     private static float[] makeCrackSegments(int x, int y, int z, int faceMask, Random random) {
-        FloatBuilder values = new FloatBuilder(256);
-        for (int face = 0; face < 6; face++) {
-            if ((faceMask & (1 << face)) == 0) continue;
-            float centerU = 0.43F + random.nextFloat() * 0.14F;
-            float centerV = 0.43F + random.nextFloat() * 0.14F;
-            int rays = 5 + random.nextInt(3);
-            float angleOffset = random.nextFloat() * 0.5F;
+        FloatBuilder values = new FloatBuilder(192);
 
-            for (int ray = 0; ray < rays; ray++) {
-                float angle = angleOffset + ray * ((float) Math.PI * 2.0F / rays);
-                float du = (float) Math.cos(angle);
-                float dv = (float) Math.sin(angle);
-                float edgeDistance = 0.49F / Math.max(0.25F, Math.max(Math.abs(du), Math.abs(dv)));
-                float endU = Mth.clamp(centerU + du * edgeDistance, 0.015F, 0.985F);
-                float endV = Mth.clamp(centerV + dv * edgeDistance, 0.015F, 0.985F);
+        // On horizontal top faces, every block uses deterministic shared edge anchors.
+        // Matching anchors make cracks continue across same-height neighbouring blocks
+        // instead of looking like separate decals or unrelated stars on every block.
+        if ((faceMask & 1) != 0) {
+            float centerU = 0.46F + random.nextFloat() * 0.08F;
+            float centerV = 0.46F + random.nextFloat() * 0.08F;
+            for (int edge = 0; edge < 4; edge++) {
+                float edgeT;
+                float endU;
+                float endV;
+                if (edge == 0) {
+                    edgeT = sharedEdgeParameter(x, z, y, 0);
+                    endU = 0.015F;
+                    endV = edgeT;
+                } else if (edge == 1) {
+                    edgeT = sharedEdgeParameter(x + 1, z, y, 0);
+                    endU = 0.985F;
+                    endV = edgeT;
+                } else if (edge == 2) {
+                    edgeT = sharedEdgeParameter(x, z + 1, y, 1);
+                    endU = edgeT;
+                    endV = 0.015F;
+                } else {
+                    edgeT = sharedEdgeParameter(x, z, y, 1);
+                    endU = edgeT;
+                    endV = 0.985F;
+                }
+
                 float prevU = centerU;
                 float prevV = centerV;
-                int pieces = 4 + random.nextInt(3);
-
+                int pieces = 3;
                 for (int p = 1; p <= pieces; p++) {
                     float t = p / (float) pieces;
-                    float jitter = (1.0F - t) * 0.15F + 0.012F;
-                    float u = centerU + (endU - centerU) * t
-                            + (random.nextFloat() - 0.5F) * jitter;
-                    float v = centerV + (endV - centerV) * t
-                            + (random.nextFloat() - 0.5F) * jitter;
-                    float halfWidth = 0.060F + random.nextFloat() * 0.047F;
-                    addFaceSegment(values, face, prevU, prevV, u, v, halfWidth);
+                    float u = centerU + (endU - centerU) * t;
+                    float v = centerV + (endV - centerV) * t;
+                    if (p < pieces) {
+                        float jitter = (1.0F - t) * 0.12F + 0.012F;
+                        u += (random.nextFloat() - 0.5F) * jitter;
+                        v += (random.nextFloat() - 0.5F) * jitter;
+                    } else {
+                        // Keep the endpoint exact so its neighbour meets it pixel-perfectly.
+                        u = endU;
+                        v = endV;
+                    }
+                    float halfWidth = 0.061F + random.nextFloat() * 0.040F;
+                    addFaceSegment(values, 0, prevU, prevV, u, v, halfWidth);
                     prevU = u;
                     prevV = v;
                 }
 
-                if (random.nextFloat() < 0.86F) {
-                    float branchU = centerU + (endU - centerU) * (0.30F + random.nextFloat() * 0.38F);
-                    float branchV = centerV + (endV - centerV) * (0.30F + random.nextFloat() * 0.38F);
-                    float branchAngle = angle + (random.nextBoolean() ? 1.0F : -1.0F)
-                            * (0.58F + random.nextFloat() * 0.70F);
-                    float branchEndU = Mth.clamp(branchU + (float) Math.cos(branchAngle) * 0.30F,
-                            0.015F, 0.985F);
-                    float branchEndV = Mth.clamp(branchV + (float) Math.sin(branchAngle) * 0.30F,
-                            0.015F, 0.985F);
-                    float midU = (branchU + branchEndU) * 0.5F
-                            + (random.nextFloat() - 0.5F) * 0.055F;
-                    float midV = (branchV + branchEndV) * 0.5F
-                            + (random.nextFloat() - 0.5F) * 0.055F;
-                    float branchWidth = 0.042F + random.nextFloat() * 0.035F;
-                    addFaceSegment(values, face, branchU, branchV, midU, midV, branchWidth);
-                    addFaceSegment(values, face, midU, midV, branchEndU, branchEndV, branchWidth * 0.88F);
+                // A short crooked branch breaks the clean spoke appearance.
+                if (random.nextFloat() < 0.72F) {
+                    float branchU = centerU + (endU - centerU) * (0.35F + random.nextFloat() * 0.28F);
+                    float branchV = centerV + (endV - centerV) * (0.35F + random.nextFloat() * 0.28F);
+                    float branchAngle = (float) Math.atan2(endV - centerV, endU - centerU)
+                            + (random.nextBoolean() ? 1.0F : -1.0F)
+                            * (0.72F + random.nextFloat() * 0.52F);
+                    float branchEndU = Mth.clamp(branchU + (float) Math.cos(branchAngle)
+                            * (0.18F + random.nextFloat() * 0.16F), 0.015F, 0.985F);
+                    float branchEndV = Mth.clamp(branchV + (float) Math.sin(branchAngle)
+                            * (0.18F + random.nextFloat() * 0.16F), 0.015F, 0.985F);
+                    float branchMidU = (branchU + branchEndU) * 0.5F
+                            + (random.nextFloat() - 0.5F) * 0.05F;
+                    float branchMidV = (branchV + branchEndV) * 0.5F
+                            + (random.nextFloat() - 0.5F) * 0.05F;
+                    float branchWidth = 0.040F + random.nextFloat() * 0.028F;
+                    addFaceSegment(values, 0, branchU, branchV, branchMidU, branchMidV, branchWidth);
+                    addFaceSegment(values, 0, branchMidU, branchMidV,
+                            branchEndU, branchEndV, branchWidth * 0.84F);
+                }
+            }
+        }
+
+        // Exposed vertical walls receive their own downward-running fractures.
+        for (int face = 2; face < 6; face++) {
+            if ((faceMask & (1 << face)) == 0) continue;
+            float centerU = 0.42F + random.nextFloat() * 0.16F;
+            float centerV = 0.72F + random.nextFloat() * 0.12F;
+            int rays = 3 + random.nextInt(2);
+            float angleOffset = random.nextFloat() * 0.7F;
+            for (int ray = 0; ray < rays; ray++) {
+                float angle = angleOffset + ray * ((float) Math.PI * 2.0F / rays);
+                float endU = Mth.clamp(centerU + (float) Math.cos(angle) * 0.42F,
+                        0.02F, 0.98F);
+                float endV = Mth.clamp(centerV + (float) Math.sin(angle) * 0.68F,
+                        0.02F, 0.98F);
+                float prevU = centerU;
+                float prevV = centerV;
+                for (int p = 1; p <= 3; p++) {
+                    float t = p / 3.0F;
+                    float jitter = (1.0F - t) * 0.12F + 0.01F;
+                    float u = centerU + (endU - centerU) * t;
+                    float v = centerV + (endV - centerV) * t;
+                    if (p < 3) {
+                        u += (random.nextFloat() - 0.5F) * jitter;
+                        v += (random.nextFloat() - 0.5F) * jitter;
+                    }
+                    float halfWidth = 0.050F + random.nextFloat() * 0.038F;
+                    addFaceSegment(values, face, prevU, prevV, u, v, halfWidth);
+                    prevU = u;
+                    prevV = v;
+                }
+                if (random.nextFloat() < 0.58F) {
+                    float branchU = (centerU + endU) * 0.5F;
+                    float branchV = (centerV + endV) * 0.5F;
+                    float branchEndU = Mth.clamp(branchU + (random.nextFloat() - 0.5F) * 0.40F,
+                            0.02F, 0.98F);
+                    float branchEndV = Mth.clamp(branchV - 0.18F - random.nextFloat() * 0.22F,
+                            0.02F, 0.98F);
+                    addFaceSegment(values, face, branchU, branchV,
+                            branchEndU, branchEndV, 0.044F + random.nextFloat() * 0.024F);
                 }
             }
         }
         return values.toArray();
     }
 
+    private static float sharedEdgeParameter(int edgeA, int edgeB, int y, int axis) {
+        long hash = 0x9E3779B97F4A7C15L;
+        hash ^= (long) edgeA * 0x632BE59BD9B4E019L;
+        hash ^= (long) edgeB * 0x9E3779B185EBCA87L;
+        hash ^= (long) y * 0xC2B2AE3D27D4EB4FL;
+        hash ^= (long) axis * 0x165667B19E3779F9L;
+        hash = (hash ^ (hash >>> 30)) * 0xBF58476D1CE4E5B9L;
+        hash = (hash ^ (hash >>> 27)) * 0x94D049BB133111EBL;
+        hash ^= hash >>> 31;
+        float unit = ((hash >>> 40) & 0xFFFFFFL) / 16777215.0F;
+        return 0.22F + unit * 0.56F;
+    }
     private static void addFaceSegment(FloatBuilder output, int face,
                                        float u0, float v0, float u1, float v1,
                                        float halfWidth) {

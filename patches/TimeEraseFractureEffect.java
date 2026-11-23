@@ -62,6 +62,9 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
     private static final int ROCK_EMERGENCE_TICKS = 7;
+    // Keep the captured scene visible while the first fragments emerge, so the cut
+    // never leaves a half-second empty gap before the debris becomes visible.
+    private static final int POST_SHATTER_SCENE_HOLD_TICKS = 10;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
     private static final double SLASH_DELAY_SECONDS = 1.08D;
     private static final double SLASH_TRAVEL_SECONDS = 0.16D;
@@ -119,7 +122,8 @@ public final class TimeEraseFractureEffect {
             reset();
         }
 
-        if (!abilityActive && previousAbilityActive) {
+        // Do not allow the Diavolo track to outlive the Time Erase ability.
+        if (!abilityActive) {
             stopTheme();
         }
 
@@ -215,6 +219,8 @@ public final class TimeEraseFractureEffect {
     }
 
     private static void stopTheme() {
+        // Stop by event id as well as by instance to catch any queued/restarted copy.
+        Minecraft.getInstance().getSoundManager().stop(ModSounds.DIAVOLO_THEME_ID, null);
         if (themeInstance != null) {
             Minecraft.getInstance().getSoundManager().stop(themeInstance);
             themeInstance = null;
@@ -351,13 +357,14 @@ public final class TimeEraseFractureEffect {
         if (!effectActive || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-        // The full captured terrain vanishes on the exact shatter tick.
-        // Rock creation is triggered by the same tick() threshold, so the
-        // debris burst and ground disappearance share one visual frame.
-        if (elapsedTicks < SHATTER_TICK) {
+        // Keep the captured scene as a short afterimage while the newly spawned
+        // rocks rise through the ground. At ten ticks (0.5 seconds), the fragments
+        // are already fully emerged and the old scene can disappear without a void.
+        if (elapsedTicks < SHATTER_TICK + POST_SHATTER_SCENE_HOLD_TICKS) {
             renderCapturedScene(poseStack, buffer, view);
             buffer.endBatch();
-        } else if (!ROCKS.isEmpty()) {
+        }
+        if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
             renderRocks(poseStack, buffer, view, partialTick);
         }
     }
@@ -706,11 +713,22 @@ public final class TimeEraseFractureEffect {
             halfZ = 0.30F + random.nextFloat() * 0.12F;
         }
 
+        // Only a portion of large and medium fragments receive chipped,
+        // slightly pointed corners; the overall silhouettes remain broad slabs.
+        boolean sharpenedEdges = sizeClass == 0
+                ? random.nextFloat() < 0.42F
+                : sizeClass == 1 && random.nextFloat() < 0.32F;
         int sides = 5 + random.nextInt(3);
         float phase = random.nextFloat() * (float) (Math.PI * 2.0D);
-        float ringTwist = (random.nextFloat() - 0.5F) * 0.10F;
+        float ringTwist = (random.nextFloat() - 0.5F) * (sharpenedEdges ? 0.15F : 0.10F);
         float leanX = (random.nextFloat() - 0.5F) * halfX * 0.10F;
         float leanZ = (random.nextFloat() - 0.5F) * halfZ * 0.10F;
+        float[] edgePeaks = new float[sides];
+        for (int side = 0; side < sides; side++) {
+            edgePeaks[side] = sharpenedEdges && random.nextFloat() < 0.40F
+                    ? 0.10F + random.nextFloat() * 0.12F
+                    : sharpenedEdges ? -random.nextFloat() * 0.025F : 0.0F;
+        }
         float[][] vertices = new float[sides * 3 + 2][3];
 
         // Three rings give each fragment a broad central body, chipped upper
@@ -718,9 +736,13 @@ public final class TimeEraseFractureEffect {
         for (int ring = 0; ring < 3; ring++) {
             for (int side = 0; side < sides; side++) {
                 float angle = phase + (float) (Math.PI * 2.0D * side / sides)
-                        + (ring - 1) * ringTwist;
+                        + (ring - 1) * ringTwist
+                        + (ring == 2 ? edgePeaks[side] * 0.10F : 0.0F);
                 float radialNoise = 0.90F + random.nextFloat() * 0.18F;
-                float chippedEdge = 1.0F + (float) Math.sin(side * 2.31F + phase) * 0.045F;
+                float edgeWave = sharpenedEdges ? 0.075F : 0.045F;
+                float chippedEdge = 1.0F
+                        + (float) Math.sin(side * 2.31F + phase) * edgeWave
+                        + edgePeaks[side];
                 float radius = radialNoise * chippedEdge;
                 float ringX = ring == 0 ? -leanX * 0.25F
                         : ring == 1 ? leanX : leanX * 0.55F;
@@ -734,7 +756,8 @@ public final class TimeEraseFractureEffect {
                 } else if (ring == 1) {
                     y = (random.nextFloat() - 0.5F) * halfY * 0.24F;
                 } else {
-                    y = halfY * (0.72F + random.nextFloat() * 0.20F);
+                    y = halfY * (0.72F + random.nextFloat() * 0.20F
+                            + edgePeaks[side] * 0.60F);
                 }
                 vertices[ring * sides + side] = new float[] {x, y, z};
             }

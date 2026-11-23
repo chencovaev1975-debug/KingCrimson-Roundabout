@@ -59,6 +59,7 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
     private static final int ROCK_EMERGENCE_TICKS = 7;
+    private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
     private static final int PURPLE_FLASH_START_TICK = 21;
     private static final int PURPLE_FLASH_DURATION_TICKS = 4;
     private static final int BIG_ROCK_COUNT = 10;
@@ -353,7 +354,7 @@ public final class TimeEraseFractureEffect {
         if (!effectActive || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-        if (elapsedTicks < SHATTER_TICK + ROCK_EMERGENCE_TICKS) {
+        if (elapsedTicks < SHATTER_TICK + ROCK_EMERGENCE_TICKS + ROCK_MAX_SPAWN_DELAY_TICKS) {
             // Keep opaque upper terrain over the fragments while they rise.
             // Depth testing hides each piece until it actually breaks free.
             renderCapturedScene(poseStack, buffer, view);

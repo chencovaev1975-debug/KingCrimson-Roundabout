@@ -35,16 +35,16 @@ import java.util.Random;
  * Client-only Time Erase scene snapshot.
  *
  * The visible block shell (terrain, trees, leaves and other block models) is
- * captured in a bounded 20-block radius. It is never changed on the server.
+ * captured in a bounded 30-block radius. It is never changed on the server.
  * At the shatter moment the captured scene is hidden and angular stone meshes
  * burst outward. Each mesh lives for one second and then vanishes.
  */
 public final class TimeEraseFractureEffect {
-    private static final int RADIUS = 20;
-    private static final int BAND_COUNT = 4;
+    private static final int RADIUS = 30;
+    private static final int BAND_COUNT = 6;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
-    private static final int MAX_BLOCKS = 6000;
-    private static final int[] OBJECT_CAPS = {500, 850, 1250, 1650};
+    private static final int MAX_BLOCKS = 9000;
+    private static final int[] OBJECT_CAPS = {350, 550, 750, 950, 1150, 1350};
     private static final int OBJECT_SCAN_ABOVE = 40;
     private static final int OBJECT_SCAN_BELOW = 12;
 
@@ -52,9 +52,9 @@ public final class TimeEraseFractureEffect {
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
     private static final int ROCK_LIFETIME_TICKS = 20;
-    private static final int BIG_ROCK_COUNT = 13;
-    private static final int MEDIUM_ROCK_COUNT = 4;
-    private static final int SMALL_ROCK_COUNT = 4;
+    private static final int BIG_ROCK_COUNT = 20;
+    private static final int MEDIUM_ROCK_COUNT = 10;
+    private static final int SMALL_ROCK_COUNT = 8;
 
     private static final int[][] NEIGHBORS = {
             {1, 0, 0}, {-1, 0, 0},
@@ -69,6 +69,8 @@ public final class TimeEraseFractureEffect {
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
 
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
+    // Only real terrain-surface blocks may seed the upward rock eruption.
+    private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
             new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
 
@@ -110,12 +112,13 @@ public final class TimeEraseFractureEffect {
                 stopTheme();
                 effectActive = false;
                 BLOCKS.clear();
+                GROUND_ANCHORS.clear();
                 ROCKS.clear();
             } else {
                 elapsedTicks++;
 
                 // Capture one concentric ring per tick, avoiding a single large
-                // 20-block-radius world scan on the activation frame.
+                // 30-block-radius world scan on the activation frame.
                 if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
                     captureBand(capturedLevel,
                             (int) Math.floor(centerX),
@@ -145,6 +148,7 @@ public final class TimeEraseFractureEffect {
     private static void begin(LocalPlayer player, ClientLevel level) {
         stopTheme();
         BLOCKS.clear();
+        GROUND_ANCHORS.clear();
         ROCKS.clear();
         capturedLevel = level;
         centerX = player.getX();
@@ -172,6 +176,7 @@ public final class TimeEraseFractureEffect {
     public static void reset() {
         stopTheme();
         BLOCKS.clear();
+        GROUND_ANCHORS.clear();
         ROCKS.clear();
         capturedLevel = null;
         previousAbilityActive = false;
@@ -262,7 +267,9 @@ public final class TimeEraseFractureEffect {
 
         for (BlockSnapshot snapshot : surfaceSnapshots) {
             if (BLOCKS.size() >= MAX_BLOCKS) return;
-            BLOCKS.add(new BlockRecord(level, snapshot));
+            BlockRecord groundAnchor = new BlockRecord(level, snapshot);
+            BLOCKS.add(groundAnchor);
+            GROUND_ANCHORS.add(groundAnchor);
         }
 
         // Trees are prioritized over incidental exposed blocks. We no longer
@@ -351,13 +358,13 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Creates irregular faceted stone fragments: thirteen large diamond-like
-     * pieces, four roughly one-block angular pieces and four half-block pieces.
+     * Creates a large ground-launched stone burst: twenty massive diamond-like
+     * boulders, ten medium pieces and eight smaller chips.
      * Spawn anchors in the forward four-block camera safety zone are rejected.
      */
     private static void createRocks() {
         ROCKS.clear();
-        if (BLOCKS.isEmpty()) return;
+        if (GROUND_ANCHORS.isEmpty()) return;
 
         Random random = new Random(
                 (((long) Math.floor(centerX)) << 32)
@@ -369,13 +376,13 @@ public final class TimeEraseFractureEffect {
         );
 
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 3.0D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 4.2D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    1.45F + random.nextFloat() * 0.80F,
-                    0.055F + random.nextFloat() * 0.045F,
-                    0.090F + random.nextFloat() * 0.045F,
+                    2.75F + random.nextFloat() * 0.85F,
+                    0.028F + random.nextFloat() * 0.024F,
+                    0.30F + random.nextFloat() * 0.12F,
                     false);
         }
 
@@ -384,9 +391,9 @@ public final class TimeEraseFractureEffect {
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    0.90F + random.nextFloat() * 0.15F,
-                    0.060F + random.nextFloat() * 0.040F,
-                    0.095F + random.nextFloat() * 0.045F,
+                    1.20F + random.nextFloat() * 0.30F,
+                    0.035F + random.nextFloat() * 0.020F,
+                    0.28F + random.nextFloat() * 0.12F,
                     true);
         }
 
@@ -395,9 +402,9 @@ public final class TimeEraseFractureEffect {
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    0.45F + random.nextFloat() * 0.10F,
-                    0.070F + random.nextFloat() * 0.050F,
-                    0.105F + random.nextFloat() * 0.045F,
+                    0.65F + random.nextFloat() * 0.20F,
+                    0.040F + random.nextFloat() * 0.020F,
+                    0.26F + random.nextFloat() * 0.12F,
                     true);
         }
     }
@@ -410,8 +417,8 @@ public final class TimeEraseFractureEffect {
             double minSpacingSquared = minSpacing * minSpacing
                     * spacingFactor * spacingFactor;
 
-            for (int attempt = 0; attempt < Math.max(900, BLOCKS.size() * 2); attempt++) {
-                BlockRecord candidate = BLOCKS.get(random.nextInt(BLOCKS.size()));
+            for (int attempt = 0; attempt < Math.max(900, GROUND_ANCHORS.size() * 2); attempt++) {
+                BlockRecord candidate = GROUND_ANCHORS.get(random.nextInt(GROUND_ANCHORS.size()));
                 if (used.contains(candidate) || !isSafeVisibleAnchor(candidate)) continue;
 
                 boolean spaced = true;
@@ -457,10 +464,14 @@ public final class TimeEraseFractureEffect {
         float velocityZ = directionZ * horizontalSpeed
                 + (random.nextFloat() - 0.5F) * 0.09F;
         float velocityY = verticalSpeed;
+        // Seat the lowest vertex directly on the terrain surface. Large
+        // diamonds use a deeper bottom point than the bevelled fragments.
+        float baseOffset = beveledShape ? 0.55F : 0.84F;
+        float startY = anchor.y + scale * baseOffset + 0.025F;
 
         ROCKS.add(new Rock(
                 anchor.x + 0.5F,
-                anchor.y + 0.45F,
+                startY,
                 anchor.z + 0.5F,
                 velocityX,
                 velocityY,

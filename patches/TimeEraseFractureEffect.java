@@ -99,8 +99,11 @@ public final class TimeEraseFractureEffect {
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
-    // Per-column procedural 3D fracture meshes; never a repeated texture or PNG.
-    private static final List<GroundCrack> GROUND_CRACKS = new ArrayList<>(3000);
+    // One world-space fracture graph is clipped into the surface columns it crosses.
+    // This prevents a tiled crack pattern from being generated independently per block.
+    private static final List<WorldCrackSegment> WORLD_CRACK_SEGMENTS = new ArrayList<>(320);
+    // Per-column 3D trench meshes retain the existing recessed floors and raised lips.
+    private static final List<GroundCrack> GROUND_CRACKS = new ArrayList<>(1200);
     private static final List<Rock> ROCKS =
             new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
     // Generated meshes are immutable after creation and reused by seed.
@@ -114,6 +117,7 @@ public final class TimeEraseFractureEffect {
     private static boolean customThemePlayed;
     private static boolean rocksCreated;
     private static boolean groundCracksCreated;
+    private static boolean crackNetworkCreated;
     private static int groundCrackBuildIndex;
     private static int elapsedTicks;
     private static long effectStartNanos;
@@ -153,6 +157,8 @@ public final class TimeEraseFractureEffect {
                 GROUND_ANCHORS.clear();
                 ROCKS.clear();
                 GROUND_CRACKS.clear();
+                WORLD_CRACK_SEGMENTS.clear();
+                crackNetworkCreated = false;
                 groundCracksCreated = false;
                 groundCrackBuildIndex = 0;
                 FUTURE_PREDICTIONS.clear();
@@ -176,15 +182,21 @@ public final class TimeEraseFractureEffect {
                     }
                 }
 
-                // Prepare meshes gradually during the capture phase so the 1.60s
-                // reveal never has to build thousands of vertices in one game tick.
-                if (!groundCracksCreated && elapsedTicks > 0) {
-                    buildGroundCracksBatch(CRACK_MESHES_PER_TICK);
-                    int captureTicks = (BAND_COUNT + CAPTURE_BANDS_PER_TICK - 1)
-                            / CAPTURE_BANDS_PER_TICK;
-                    if (elapsedTicks >= captureTicks
-                            && groundCrackBuildIndex >= GROUND_ANCHORS.size()) {
-                        groundCracksCreated = true;
+                // Wait until the full ground ring is captured, then create one
+                // impact-centered fracture graph and clip it into surface columns.
+                // Meshes are still built in batches, keeping frame-time spikes bounded.
+                int captureTicks = (BAND_COUNT + CAPTURE_BANDS_PER_TICK - 1)
+                        / CAPTURE_BANDS_PER_TICK;
+                if (elapsedTicks >= captureTicks) {
+                    if (!crackNetworkCreated) {
+                        createWorldCrackNetwork();
+                        crackNetworkCreated = true;
+                    }
+                    if (!groundCracksCreated) {
+                        buildGroundCracksBatch(CRACK_MESHES_PER_TICK);
+                        if (groundCrackBuildIndex >= GROUND_ANCHORS.size()) {
+                            groundCracksCreated = true;
+                        }
                     }
                 }
 
@@ -212,6 +224,8 @@ public final class TimeEraseFractureEffect {
         GROUND_ANCHORS.clear();
         ROCKS.clear();
         GROUND_CRACKS.clear();
+        WORLD_CRACK_SEGMENTS.clear();
+        crackNetworkCreated = false;
         groundCrackBuildIndex = 0;
         capturedLevel = level;
         centerX = player.getX();
@@ -242,6 +256,8 @@ public final class TimeEraseFractureEffect {
         GROUND_ANCHORS.clear();
         ROCKS.clear();
         GROUND_CRACKS.clear();
+        WORLD_CRACK_SEGMENTS.clear();
+        crackNetworkCreated = false;
         groundCrackBuildIndex = 0;
         capturedLevel = null;
         previousAbilityActive = false;
@@ -463,94 +479,272 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Builds a unique, connected fracture network over every captured ground column.
-     * Shared edge ports are seeded from world coordinates, so cracks continue across
-     * neighboring blocks instead of repeating a tile-shaped decal.
+     * Creates one irregular, impact-centered fracture graph in world coordinates.
+     * Main fractures radiate from the impact point; secondary and tertiary branches
+     * split from existing fractures, like cracks propagating through broken ice.
+     */
+    private static void createWorldCrackNetwork() {
+        WORLD_CRACK_SEGMENTS.clear();
+        if (GROUND_ANCHORS.isEmpty()) return;
+
+        long seed = ((long) Math.floor(centerX) * 0x9E3779B97F4A7C15L)
+                ^ ((long) Math.floor(centerZ) * 0xC2B2AE3D27D4EB4FL)
+                ^ 0x4B435F4943454352L;
+        Random random = new Random(mixCrackSeed(seed));
+        CrackPoint impact = new CrackPoint(
+                (float) centerX + (random.nextFloat() - 0.5F) * 0.22F,
+                (float) centerZ + (random.nextFloat() - 0.5F) * 0.22F
+        );
+
+        int primaryCount = 8 + random.nextInt(2);
+        List<List<CrackPoint>> primaryPaths = new ArrayList<>(primaryCount);
+        List<Float> primaryWidths = new ArrayList<>(primaryCount);
+        List<Float> primaryLips = new ArrayList<>(primaryCount);
+
+        // The first fractures form an uneven radial skeleton, not a block-by-block web.
+        float angularOffset = random.nextFloat() * (float) (Math.PI * 2.0D);
+        for (int i = 0; i < primaryCount; i++) {
+            float angle = angularOffset
+                    + (float) (Math.PI * 2.0D * i / primaryCount)
+                    + (random.nextFloat() - 0.5F) * 0.24F;
+            float length = 20.0F + random.nextFloat() * 9.0F;
+            float halfWidth = 0.052F + random.nextFloat() * 0.022F;
+            float lipHeight = 0.034F + random.nextFloat() * 0.024F;
+            List<CrackPoint> path = createWorldCrackBranch(
+                    impact, angle, length, 0.24F, random);
+            if (path.size() < 2) continue;
+
+            primaryPaths.add(path);
+            primaryWidths.add(halfWidth);
+            primaryLips.add(lipHeight);
+            addWorldCrackPath(path, halfWidth, lipHeight, random);
+        }
+
+        // Branches split from different points along each main fracture. Their
+        // angles, lengths and jaggedness vary, so the result never repeats as tiles.
+        for (int pathIndex = 0; pathIndex < primaryPaths.size(); pathIndex++) {
+            List<CrackPoint> parent = primaryPaths.get(pathIndex);
+            if (parent.size() < 5) continue;
+
+            List<Integer> candidates = new ArrayList<>();
+            for (int i = 2; i < parent.size() - 1; i++) {
+                CrackPoint point = parent.get(i);
+                double dx = point.x - centerX;
+                double dz = point.z - centerZ;
+                if (Math.sqrt(dx * dx + dz * dz) < RADIUS - 5.0D) {
+                    candidates.add(i);
+                }
+            }
+            for (int i = candidates.size() - 1; i > 0; i--) {
+                int swap = random.nextInt(i + 1);
+                int value = candidates.get(i);
+                candidates.set(i, candidates.get(swap));
+                candidates.set(swap, value);
+            }
+
+            int branchCount = Math.min(3 + random.nextInt(3), candidates.size());
+            for (int branchIndex = 0; branchIndex < branchCount; branchIndex++) {
+                int pivotIndex = candidates.get(branchIndex);
+                CrackPoint previous = parent.get(pivotIndex - 1);
+                CrackPoint pivot = parent.get(pivotIndex);
+                float tangent = (float) Math.atan2(
+                        pivot.z - previous.z, pivot.x - previous.x);
+                float side = random.nextBoolean() ? 1.0F : -1.0F;
+                float branchAngle = tangent
+                        + side * (0.48F + random.nextFloat() * 0.92F);
+                float branchLength = 4.2F + random.nextFloat() * 7.6F;
+                float branchWidth = primaryWidths.get(pathIndex)
+                        * (0.62F + random.nextFloat() * 0.18F);
+                float branchLip = primaryLips.get(pathIndex)
+                        * (0.66F + random.nextFloat() * 0.25F);
+                List<CrackPoint> branch = createWorldCrackBranch(
+                        pivot, branchAngle, branchLength, 0.46F, random);
+                if (branch.size() < 2) continue;
+                addWorldCrackPath(branch, branchWidth, branchLip, random);
+
+                // A smaller number of fine forks create natural, uneven fracture edges.
+                if (branch.size() >= 4 && random.nextFloat() < 0.34F) {
+                    int forkIndex = 1 + random.nextInt(branch.size() - 2);
+                    CrackPoint forkPrevious = branch.get(forkIndex - 1);
+                    CrackPoint fork = branch.get(forkIndex);
+                    float forkTangent = (float) Math.atan2(
+                            fork.z - forkPrevious.z, fork.x - forkPrevious.x);
+                    float forkSide = random.nextBoolean() ? 1.0F : -1.0F;
+                    float forkAngle = forkTangent
+                            + forkSide * (0.58F + random.nextFloat() * 0.86F);
+                    List<CrackPoint> fineFork = createWorldCrackBranch(
+                            fork, forkAngle, 2.4F + random.nextFloat() * 3.8F,
+                            0.56F, random);
+                    addWorldCrackPath(fineFork,
+                            branchWidth * (0.48F + random.nextFloat() * 0.16F),
+                            branchLip * (0.66F + random.nextFloat() * 0.18F),
+                            random);
+                }
+            }
+        }
+    }
+
+    /**
+     * Extends one jagged fracture in short, irregular steps. The small direction
+     * changes create sharp bends while the overall direction remains coherent.
+     */
+    private static List<CrackPoint> createWorldCrackBranch(CrackPoint start,
+                                                            float initialAngle,
+                                                            float maxLength,
+                                                            float angularChaos,
+                                                            Random random) {
+        List<CrackPoint> points = new ArrayList<>(12);
+        points.add(start);
+        float x = start.x;
+        float z = start.z;
+        float angle = initialAngle;
+        float traveled = 0.0F;
+
+        for (int guard = 0; guard < 40 && traveled < maxLength; guard++) {
+            angle += (random.nextFloat() - 0.5F) * angularChaos;
+            float step = Math.min(maxLength - traveled,
+                    1.05F + random.nextFloat() * 1.35F);
+            float lateral = (random.nextFloat() - 0.5F) * 0.34F;
+            float nextX = x + (float) Math.cos(angle) * step
+                    - (float) Math.sin(angle) * lateral;
+            float nextZ = z + (float) Math.sin(angle) * step
+                    + (float) Math.cos(angle) * lateral;
+
+            double radialX = nextX - centerX;
+            double radialZ = nextZ - centerZ;
+            double radialLength = Math.sqrt(radialX * radialX + radialZ * radialZ);
+            double maxRadius = RADIUS - 0.45D;
+            if (radialLength > maxRadius) {
+                double scale = maxRadius / radialLength;
+                nextX = (float) (centerX + radialX * scale);
+                nextZ = (float) (centerZ + radialZ * scale);
+            }
+
+            float actualX = nextX - x;
+            float actualZ = nextZ - z;
+            float actualLength = (float) Math.sqrt(
+                    actualX * actualX + actualZ * actualZ);
+            if (actualLength < 0.18F) break;
+
+            points.add(new CrackPoint(nextX, nextZ));
+            traveled += step;
+            x = nextX;
+            z = nextZ;
+            if (radialLength >= maxRadius - 0.02D) break;
+        }
+        return points;
+    }
+
+    private static void addWorldCrackPath(List<CrackPoint> points,
+                                          float halfWidth,
+                                          float lipHeight,
+                                          Random random) {
+        for (int i = 0; i < points.size() - 1; i++) {
+            CrackPoint start = points.get(i);
+            CrackPoint end = points.get(i + 1);
+            float dx = end.x - start.x;
+            float dz = end.z - start.z;
+            if (dx * dx + dz * dz < 0.012F) continue;
+            WORLD_CRACK_SEGMENTS.add(new WorldCrackSegment(
+                    start.x, start.z, end.x, end.z,
+                    halfWidth * (0.84F + random.nextFloat() * 0.32F),
+                    lipHeight * (0.78F + random.nextFloat() * 0.40F),
+                    random.nextLong()
+            ));
+        }
+    }
+
+    /**
+     * Builds only the pieces of the shared fracture graph that cross each captured
+     * surface block. Blocks untouched by a fracture remain intact and unmarked.
      */
     private static void buildGroundCracksBatch(int maxBlocks) {
-        if (capturedLevel == null || GROUND_ANCHORS.isEmpty()) return;
+        if (capturedLevel == null || GROUND_ANCHORS.isEmpty()
+                || WORLD_CRACK_SEGMENTS.isEmpty()) {
+            groundCrackBuildIndex = GROUND_ANCHORS.size();
+            return;
+        }
 
         int endIndex = Math.min(GROUND_ANCHORS.size(), groundCrackBuildIndex + maxBlocks);
         BlockRenderDispatcher dispatcher = Minecraft.getInstance().getBlockRenderer();
         for (int recordIndex = groundCrackBuildIndex; recordIndex < endIndex; recordIndex++) {
             BlockRecord record = GROUND_ANCHORS.get(recordIndex);
             long seed = crackBlockSeed(record);
-            Random random = new Random(seed);
+            CrackMeshBuilder builder = new CrackMeshBuilder();
+
+            for (WorldCrackSegment segment : WORLD_CRACK_SEGMENTS) {
+                if (Math.max(segment.startX, segment.endX) < record.x
+                        || Math.min(segment.startX, segment.endX) > record.x + 1.0F
+                        || Math.max(segment.startZ, segment.endZ) < record.z
+                        || Math.min(segment.startZ, segment.endZ) > record.z + 1.0F) {
+                    continue;
+                }
+
+                CrackPath clipped = clipWorldCrackSegment(segment, record);
+                if (clipped == null) continue;
+                Random segmentRandom = new Random(seed ^ segment.seed);
+                addCrackPath(builder, record, clipped, segmentRandom);
+            }
+
+            if (builder.quadCount == 0) continue;
+
             BakedModel model = dispatcher.getBlockModelShaper().getBlockModel(record.state);
             List<BakedQuad> topQuads = model.getQuads(
                     record.state, Direction.UP, RandomSource.create(seed));
             TextureAtlasSprite sprite = topQuads.isEmpty()
                     ? model.getParticleIcon()
-                    : topQuads.get(random.nextInt(topQuads.size())).getSprite();
+                    : topQuads.get(new Random(seed ^ 0xA0761D6478BD642FL)
+                            .nextInt(topQuads.size())).getSprite();
             if (sprite == null) continue;
-
-            CrackMeshBuilder builder = new CrackMeshBuilder();
-            List<CrackPoint> ports = new ArrayList<>(8);
-            for (int edge = 0; edge < 4; edge++) {
-                addCrackEdgePorts(ports, record, edge);
-            }
-
-            CrackPoint junction = new CrackPoint(
-                    0.27F + random.nextFloat() * 0.46F,
-                    0.27F + random.nextFloat() * 0.46F
-            );
-            List<CrackPath> paths = new ArrayList<>(10);
-
-            if (ports.isEmpty()) {
-                // Some blocks intentionally have no boundary connection; give them
-                // a distinct internal split rather than leaving a repeated empty tile.
-                CrackPoint start = randomBoundaryPoint(random);
-                CrackPoint end = randomBoundaryPoint(random);
-                paths.add(createWavyCrackPath(start, end, random,
-                        0.048F + random.nextFloat() * 0.038F,
-                        0.034F + random.nextFloat() * 0.046F));
-            } else {
-                for (CrackPoint port : ports) {
-                    paths.add(createWavyCrackPath(
-                            port, junction, random,
-                            0.046F + random.nextFloat() * 0.042F,
-                            0.034F + random.nextFloat() * 0.050F
-                    ));
-                }
-                if (ports.size() == 1) {
-                    CrackPoint localEnd = new CrackPoint(
-                            0.10F + random.nextFloat() * 0.80F,
-                            0.10F + random.nextFloat() * 0.80F
-                    );
-                    paths.add(createWavyCrackPath(junction, localEnd, random,
-                            0.038F + random.nextFloat() * 0.026F,
-                            0.030F + random.nextFloat() * 0.030F));
-                }
-            }
-
-            // Add irregular side fractures to create branching Y-junctions.
-            // Every branch has its own width, depth, number of bends and direction.
-            int branchCount = random.nextFloat() < 0.30F ? 2 : 1;
-            for (int i = 0; i < branchCount && !paths.isEmpty(); i++) {
-                CrackPath parent = paths.get(random.nextInt(paths.size()));
-                if (parent.points.size() < 3) continue;
-                int pivotIndex = 1 + random.nextInt(parent.points.size() - 2);
-                CrackPoint branchStart = parent.points.get(pivotIndex);
-                CrackPoint branchEnd = new CrackPoint(
-                        0.08F + random.nextFloat() * 0.84F,
-                        0.08F + random.nextFloat() * 0.84F
-                );
-                paths.add(createWavyCrackPath(
-                        branchStart, branchEnd, random,
-                        parent.halfWidth * (0.40F + random.nextFloat() * 0.22F),
-                        parent.lipHeight * (0.70F + random.nextFloat() * 0.28F)
-                ));
-            }
-
-            for (CrackPath path : paths) {
-                addCrackPath(builder, record, path, random);
-            }
-
-            if (builder.quadCount > 0) {
-                GROUND_CRACKS.add(builder.build(record, sprite));
-            }
+            GROUND_CRACKS.add(builder.build(record, sprite));
         }
         groundCrackBuildIndex = endIndex;
+    }
+
+    /** Liang-Barsky clipping keeps each global fracture continuous across block edges. */
+    private static CrackPath clipWorldCrackSegment(WorldCrackSegment segment,
+                                                    BlockRecord record) {
+        double dx = segment.endX - segment.startX;
+        double dz = segment.endZ - segment.startZ;
+        double[] interval = {0.0D, 1.0D};
+        if (!clipCrackBoundary(-dx, segment.startX - record.x, interval)
+                || !clipCrackBoundary(dx, record.x + 1.0D - segment.startX, interval)
+                || !clipCrackBoundary(-dz, segment.startZ - record.z, interval)
+                || !clipCrackBoundary(dz, record.z + 1.0D - segment.startZ, interval)) {
+            return null;
+        }
+
+        double tStart = interval[0];
+        double tEnd = interval[1];
+        double segmentLength = Math.sqrt(dx * dx + dz * dz);
+        if ((tEnd - tStart) * segmentLength < 0.035D) return null;
+
+        float startX = (float) Math.max(0.0D, Math.min(1.0D,
+                segment.startX + dx * tStart - record.x));
+        float startZ = (float) Math.max(0.0D, Math.min(1.0D,
+                segment.startZ + dz * tStart - record.z));
+        float endX = (float) Math.max(0.0D, Math.min(1.0D,
+                segment.startX + dx * tEnd - record.x));
+        float endZ = (float) Math.max(0.0D, Math.min(1.0D,
+                segment.startZ + dz * tEnd - record.z));
+
+        List<CrackPoint> clippedPoints = new ArrayList<>(2);
+        clippedPoints.add(new CrackPoint(startX, startZ));
+        clippedPoints.add(new CrackPoint(endX, endZ));
+        return new CrackPath(clippedPoints, segment.halfWidth, segment.lipHeight);
+    }
+
+    private static boolean clipCrackBoundary(double p, double q, double[] interval) {
+        if (Math.abs(p) < 1.0E-10D) return q >= 0.0D;
+        double ratio = q / p;
+        if (p < 0.0D) {
+            if (ratio > interval[1]) return false;
+            if (ratio > interval[0]) interval[0] = ratio;
+        } else {
+            if (ratio < interval[0]) return false;
+            if (ratio < interval[1]) interval[1] = ratio;
+        }
+        return true;
     }
 
     private static long crackBlockSeed(BlockRecord record) {
@@ -1707,6 +1901,27 @@ public final class TimeEraseFractureEffect {
             z = snapshot.z;
             state = snapshot.state;
             packedLight = LevelRenderer.getLightColor(level, new BlockPos(x, y, z));
+        }
+    }
+
+    private static final class WorldCrackSegment {
+        final float startX;
+        final float startZ;
+        final float endX;
+        final float endZ;
+        final float halfWidth;
+        final float lipHeight;
+        final long seed;
+
+        WorldCrackSegment(float startX, float startZ, float endX, float endZ,
+                          float halfWidth, float lipHeight, long seed) {
+            this.startX = startX;
+            this.startZ = startZ;
+            this.endX = endX;
+            this.endZ = endZ;
+            this.halfWidth = halfWidth;
+            this.lipHeight = lipHeight;
+            this.seed = seed;
         }
     }
 

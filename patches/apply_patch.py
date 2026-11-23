@@ -71,7 +71,7 @@ renderer.write_text(sky_source[:sky_start] + sky_section + sky_source[sky_end:],
 
 
 
-# Render the short violet flash as a single fullscreen HUD overlay. This avoids
+# Render the short rose-pink flash as a single fullscreen HUD overlay. This avoids
 # per-block geometry and keeps the effect independent of the camera/world mesh.
 hud = root / "common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java"
 hud_source = hud.read_text(encoding="utf-8")
@@ -89,7 +89,7 @@ flash_inject = """    @Inject(method = "renderHotbar", at = @At("TAIL"))
         if (alpha > 0.0F) {
             int alphaByte = Math.min(255, Math.max(0, Math.round(alpha * 255.0F)));
             guiGraphics.fill(0, 0, this.screenWidth, this.screenHeight,
-                    (alphaByte << 24) | 0x7A35D6);
+                    (alphaByte << 24) | 0xF45CA8);
         }
     }
 

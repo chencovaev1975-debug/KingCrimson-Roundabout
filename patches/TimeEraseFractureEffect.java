@@ -607,7 +607,7 @@ public final class TimeEraseFractureEffect {
                             .uv(stoneSprite.getU(uv[0]), stoneSprite.getV(uv[1]))
                             .overlayCoords(OverlayTexture.NO_OVERLAY)
                             .uv2(LightTexture.FULL_BRIGHT)
-                            .normal(nx, ny, nz)
+                            .normal(poseStack.last().normal(), nx, ny, nz)
                             .endVertex();
                 }
             }

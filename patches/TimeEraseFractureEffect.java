@@ -552,7 +552,7 @@ public final class TimeEraseFractureEffect {
         float[][] vertices = new float[segments * 3 + 2][3];
 
         float shapeX = 0.86F + random.nextFloat() * 0.16F;
-        float shapeY = 0.82F + random.nextFloat() * 0.14F;
+        float shapeY = 0.98F + random.nextFloat() * 0.12F;
         float shapeZ = 0.86F + random.nextFloat() * 0.16F;
 
         // Small independent shifts and radius changes create chipped silhouettes
@@ -576,7 +576,7 @@ public final class TimeEraseFractureEffect {
             float upperRadiusZ = (0.58F + random.nextFloat() * 0.13F) * shapeZ;
             vertices[upperRing + i] = new float[] {
                     (float) Math.cos(upperAngle) * upperRadiusX + upperShiftX,
-                    (0.20F + random.nextFloat() * 0.12F) * shapeY,
+                    (0.28F + random.nextFloat() * 0.11F) * shapeY,
                     (float) Math.sin(upperAngle) * upperRadiusZ + upperShiftZ
             };
 
@@ -585,7 +585,7 @@ public final class TimeEraseFractureEffect {
             vertices[middleRing + i] = new float[] {
                     (float) Math.cos(middleAngle) * middleRadiusX
                             + (random.nextFloat() - 0.5F) * 0.08F,
-                    (random.nextFloat() - 0.5F) * 0.18F * shapeY,
+                    (random.nextFloat() - 0.5F) * 0.20F * shapeY,
                     (float) Math.sin(middleAngle) * middleRadiusZ
                             + (random.nextFloat() - 0.5F) * 0.08F
             };
@@ -594,7 +594,7 @@ public final class TimeEraseFractureEffect {
             float lowerRadiusZ = (0.58F + random.nextFloat() * 0.13F) * shapeZ;
             vertices[lowerRing + i] = new float[] {
                     (float) Math.cos(lowerAngle) * lowerRadiusX + lowerShiftX,
-                    -(0.20F + random.nextFloat() * 0.12F) * shapeY,
+                    -(0.28F + random.nextFloat() * 0.11F) * shapeY,
                     (float) Math.sin(lowerAngle) * lowerRadiusZ + lowerShiftZ
             };
         }
@@ -602,12 +602,12 @@ public final class TimeEraseFractureEffect {
         // Shallow, offset caps: broad facets instead of long pointed cones.
         vertices[topCenter] = new float[] {
                 (random.nextFloat() - 0.5F) * 0.14F * shapeX + upperShiftX,
-                (0.31F + random.nextFloat() * 0.07F) * shapeY,
+                (0.40F + random.nextFloat() * 0.08F) * shapeY,
                 (random.nextFloat() - 0.5F) * 0.14F * shapeZ + upperShiftZ
         };
         vertices[bottomCenter] = new float[] {
                 (random.nextFloat() - 0.5F) * 0.16F * shapeX + lowerShiftX,
-                -(0.31F + random.nextFloat() * 0.07F) * shapeY,
+                -(0.40F + random.nextFloat() * 0.08F) * shapeY,
                 (random.nextFloat() - 0.5F) * 0.16F * shapeZ + lowerShiftZ
         };
 

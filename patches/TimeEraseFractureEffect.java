@@ -30,7 +30,9 @@ import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -56,7 +58,7 @@ public final class TimeEraseFractureEffect {
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
     private static final int PURPLE_FLASH_START_TICK = 21;
-    private static final int PURPLE_FLASH_DURATION_TICKS = 8;
+    private static final int PURPLE_FLASH_DURATION_TICKS = 4;
     private static final int BIG_ROCK_COUNT = 7;
     private static final int MEDIUM_ROCK_COUNT = 4;
     private static final int SMALL_ROCK_COUNT = 6;
@@ -79,6 +81,8 @@ public final class TimeEraseFractureEffect {
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
             new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT + CRUMB_ROCK_COUNT);
+    // Generated meshes are immutable after creation and reused by seed.
+    private static final Map<Long, RockMesh> ROCK_MESH_CACHE = new HashMap<>(64);
 
     private static boolean previousAbilityActive;
     private static boolean effectActive;
@@ -367,7 +371,7 @@ public final class TimeEraseFractureEffect {
         if (age < 0.0F || age >= PURPLE_FLASH_DURATION_TICKS) return 0.0F;
 
         float progress = age / (float) PURPLE_FLASH_DURATION_TICKS;
-        return 0.32F * (float) Math.sin(Math.PI * progress);
+        return 0.36F * (float) Math.sin(Math.PI * progress);
     }
 
     /**
@@ -476,17 +480,23 @@ public final class TimeEraseFractureEffect {
         float directionX = length > 0.001D ? (float) (dx / length) : 0.0F;
         float directionZ = length > 0.001D ? (float) (dz / length) : 0.0F;
 
-        // A restrained outward drift keeps the boulders together instead of
-        // scattering them across the whole 30-block capture radius.
         float velocityX = directionX * horizontalSpeed
                 + (random.nextFloat() - 0.5F) * 0.012F;
         float velocityZ = directionZ * horizontalSpeed
                 + (random.nextFloat() - 0.5F) * 0.012F;
         float velocityY = verticalSpeed;
-        RockMesh mesh = createRockMesh(random);
 
-        // Place the lowest vertex exactly on the surface, then lift the whole
-        // irregular 3D mesh vertically so it visibly erupts out of the ground.
+        // A per-piece seed makes the generated polyhedron stable and cacheable.
+        long meshSeed = random.nextLong();
+        RockMesh mesh = ROCK_MESH_CACHE.get(meshSeed);
+        if (mesh == null) {
+            mesh = createRockMesh(new Random(meshSeed));
+            if (ROCK_MESH_CACHE.size() >= 128) {
+                ROCK_MESH_CACHE.clear();
+            }
+            ROCK_MESH_CACHE.put(meshSeed, mesh);
+        }
+
         float lowestVertexY = 0.0F;
         for (float[] vertex : mesh.vertices) {
             lowestVertexY = Math.min(lowestVertexY, vertex[1]);
@@ -542,95 +552,94 @@ public final class TimeEraseFractureEffect {
      * dimensions stay comparable on X/Z; the shape is intentionally wider
      * than it is tall so the fragments read as broken rock, not spikes.
      */
+    /**
+     * Creates a sharp, irregular wall fragment from a deformed cuboid.
+     * The five profiles deliberately vary the dominant axis: broad slabs,
+     * upright splinters, long shards and chunky broken masonry. Each corner
+     * is independently displaced, so every triangle becomes a flat chipped
+     * facet instead of a patch on a spherical surface.
+     */
     private static RockMesh createRockMesh(Random random) {
-        final int segments = 6 + random.nextInt(3);
-        final int upperRing = 0;
-        final int middleRing = segments;
-        final int lowerRing = segments * 2;
-        final int topCenter = segments * 3;
-        final int bottomCenter = topCenter + 1;
-        float[][] vertices = new float[segments * 3 + 2][3];
+        float halfX;
+        float halfY;
+        float halfZ;
+        int profile = random.nextInt(5);
 
-        float shapeX = 0.86F + random.nextFloat() * 0.16F;
-        float shapeY = 0.98F + random.nextFloat() * 0.12F;
-        float shapeZ = 0.86F + random.nextFloat() * 0.16F;
+        if (profile == 0) {
+            // Thin stone plate.
+            halfX = 0.78F + random.nextFloat() * 0.18F;
+            halfY = 0.30F + random.nextFloat() * 0.14F;
+            halfZ = 0.58F + random.nextFloat() * 0.18F;
+        } else if (profile == 1) {
+            // Tall angular splinter from a wall edge.
+            halfX = 0.30F + random.nextFloat() * 0.16F;
+            halfY = 0.78F + random.nextFloat() * 0.18F;
+            halfZ = 0.48F + random.nextFloat() * 0.20F;
+        } else if (profile == 2) {
+            // Long, narrow shard.
+            halfX = 0.86F + random.nextFloat() * 0.16F;
+            halfY = 0.32F + random.nextFloat() * 0.18F;
+            halfZ = 0.30F + random.nextFloat() * 0.16F;
+        } else if (profile == 3) {
+            // Heavy block with no dominant axis.
+            halfX = 0.58F + random.nextFloat() * 0.20F;
+            halfY = 0.54F + random.nextFloat() * 0.22F;
+            halfZ = 0.58F + random.nextFloat() * 0.20F;
+        } else {
+            // Thick wall slab, chipped along its narrow side.
+            halfX = 0.70F + random.nextFloat() * 0.18F;
+            halfY = 0.46F + random.nextFloat() * 0.18F;
+            halfZ = 0.32F + random.nextFloat() * 0.16F;
+        }
 
-        // Small independent shifts and radius changes create chipped silhouettes
-        // without allowing one axis to become a long needle or blade.
-        float upperShiftX = (random.nextFloat() - 0.5F) * 0.10F;
-        float upperShiftZ = (random.nextFloat() - 0.5F) * 0.10F;
-        float lowerShiftX = (random.nextFloat() - 0.5F) * 0.12F;
-        float lowerShiftZ = (random.nextFloat() - 0.5F) * 0.12F;
-        float angleOffset = random.nextFloat() * (float) (Math.PI * 2.0D);
-        float angleStep = (float) (Math.PI * 2.0D) / segments;
+        float[][] vertices = new float[8][3];
+        float leanX = (random.nextFloat() - 0.5F) * 0.16F * halfX;
+        float leanY = (random.nextFloat() - 0.5F) * 0.10F * halfY;
+        float leanZ = (random.nextFloat() - 0.5F) * 0.16F * halfZ;
 
-        for (int i = 0; i < segments; i++) {
-            float baseAngle = angleOffset + i * angleStep
-                    + (random.nextFloat() - 0.5F) * angleStep * 0.24F;
+        // One independently warped point in each octant. Keeping each point
+        // in its original octant preserves a closed, box-derived polyhedron.
+        for (int i = 0; i < 8; i++) {
+            float sx = (i & 1) == 0 ? -1.0F : 1.0F;
+            float sy = (i & 2) == 0 ? -1.0F : 1.0F;
+            float sz = (i & 4) == 0 ? -1.0F : 1.0F;
 
-            float upperAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.18F;
-            float middleAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.22F;
-            float lowerAngle = baseAngle + (random.nextFloat() - 0.5F) * angleStep * 0.18F;
+            float rx = 0.84F + random.nextFloat() * 0.32F;
+            float ry = 0.82F + random.nextFloat() * 0.36F;
+            float rz = 0.84F + random.nextFloat() * 0.32F;
 
-            float upperRadiusX = (0.58F + random.nextFloat() * 0.13F) * shapeX;
-            float upperRadiusZ = (0.58F + random.nextFloat() * 0.13F) * shapeZ;
-            vertices[upperRing + i] = new float[] {
-                    (float) Math.cos(upperAngle) * upperRadiusX + upperShiftX,
-                    (0.28F + random.nextFloat() * 0.11F) * shapeY,
-                    (float) Math.sin(upperAngle) * upperRadiusZ + upperShiftZ
-            };
-
-            float middleRadiusX = (0.70F + random.nextFloat() * 0.14F) * shapeX;
-            float middleRadiusZ = (0.70F + random.nextFloat() * 0.14F) * shapeZ;
-            vertices[middleRing + i] = new float[] {
-                    (float) Math.cos(middleAngle) * middleRadiusX
-                            + (random.nextFloat() - 0.5F) * 0.08F,
-                    (random.nextFloat() - 0.5F) * 0.20F * shapeY,
-                    (float) Math.sin(middleAngle) * middleRadiusZ
-                            + (random.nextFloat() - 0.5F) * 0.08F
-            };
-
-            float lowerRadiusX = (0.58F + random.nextFloat() * 0.13F) * shapeX;
-            float lowerRadiusZ = (0.58F + random.nextFloat() * 0.13F) * shapeZ;
-            vertices[lowerRing + i] = new float[] {
-                    (float) Math.cos(lowerAngle) * lowerRadiusX + lowerShiftX,
-                    -(0.28F + random.nextFloat() * 0.11F) * shapeY,
-                    (float) Math.sin(lowerAngle) * lowerRadiusZ + lowerShiftZ
+            vertices[i] = new float[] {
+                    sx * halfX * rx + sy * leanX + (random.nextFloat() - 0.5F) * halfX * 0.08F,
+                    sy * halfY * ry + sz * leanY + (random.nextFloat() - 0.5F) * halfY * 0.08F,
+                    sz * halfZ * rz + sx * leanZ + (random.nextFloat() - 0.5F) * halfZ * 0.08F
             };
         }
 
-        // Shallow, offset caps: broad facets instead of long pointed cones.
-        vertices[topCenter] = new float[] {
-                (random.nextFloat() - 0.5F) * 0.14F * shapeX + upperShiftX,
-                (0.40F + random.nextFloat() * 0.08F) * shapeY,
-                (random.nextFloat() - 0.5F) * 0.14F * shapeZ + upperShiftZ
-        };
-        vertices[bottomCenter] = new float[] {
-                (random.nextFloat() - 0.5F) * 0.16F * shapeX + lowerShiftX,
-                -(0.40F + random.nextFloat() * 0.08F) * shapeY,
-                (random.nextFloat() - 0.5F) * 0.16F * shapeZ + lowerShiftZ
+        // Outward-wound sides of the deformed hexahedron.
+        int[][] quads = {
+                {0, 3, 2, 1}, // -Z
+                {4, 5, 6, 7}, // +Z
+                {0, 4, 7, 3}, // -X
+                {1, 2, 6, 5}, // +X
+                {0, 1, 5, 4}, // -Y
+                {3, 7, 6, 2}  // +Y
         };
 
-        int[][] faces = new int[segments * 6][3];
+        // Each side is split along a randomized diagonal. The renderer computes
+        // a separate normal for every triangle, giving crisp flat shading.
+        int[][] faces = new int[12][3];
         int face = 0;
-        for (int i = 0; i < segments; i++) {
-            int next = (i + 1) % segments;
-            faces[face++] = new int[] {topCenter, upperRing + i, upperRing + next};
-
+        for (int[] quad : quads) {
+            int a = quad[0], b = quad[1], c = quad[2], d = quad[3];
             if (random.nextBoolean()) {
-                faces[face++] = new int[] {upperRing + i, middleRing + i, middleRing + next};
-                faces[face++] = new int[] {upperRing + i, middleRing + next, upperRing + next};
-                faces[face++] = new int[] {middleRing + i, lowerRing + i, lowerRing + next};
-                faces[face++] = new int[] {middleRing + i, lowerRing + next, middleRing + next};
+                faces[face++] = new int[] {a, b, c};
+                faces[face++] = new int[] {a, c, d};
             } else {
-                faces[face++] = new int[] {upperRing + i, middleRing + i, upperRing + next};
-                faces[face++] = new int[] {upperRing + next, middleRing + i, middleRing + next};
-                faces[face++] = new int[] {middleRing + i, lowerRing + i, middleRing + next};
-                faces[face++] = new int[] {middleRing + next, lowerRing + i, lowerRing + next};
+                faces[face++] = new int[] {a, b, d};
+                faces[face++] = new int[] {b, c, d};
             }
-
-            faces[face++] = new int[] {bottomCenter, lowerRing + next, lowerRing + i};
         }
+
         return new RockMesh(vertices, faces);
     }
 
@@ -659,69 +668,114 @@ public final class TimeEraseFractureEffect {
             if (!isInView(x, y, z, camera)) continue;
 
             poseStack.pushPose();
-            poseStack.translate(x - camera.x, y - camera.y, z - camera.z);
-            poseStack.mulPose(Axis.YP.rotationDegrees(rock.yaw + age * rock.yawSpeed));
-            poseStack.mulPose(Axis.XP.rotationDegrees(rock.pitch + age * rock.pitchSpeed));
-            poseStack.mulPose(Axis.ZP.rotationDegrees(rock.roll + age * rock.rollSpeed));
-            poseStack.scale(rock.scale, rock.scale, rock.scale);
+            try {
+                poseStack.translate(x - camera.x, y - camera.y, z - camera.z);
+                poseStack.mulPose(Axis.YP.rotationDegrees(rock.yaw + age * rock.yawSpeed));
+                poseStack.mulPose(Axis.XP.rotationDegrees(rock.pitch + age * rock.pitchSpeed));
+                poseStack.mulPose(Axis.ZP.rotationDegrees(rock.roll + age * rock.rollSpeed));
+                poseStack.scale(rock.scale, rock.scale, rock.scale);
 
-            Matrix4f matrix = poseStack.last().pose();
-            for (int[] face : rock.mesh.faces) {
-                float[] a = rock.mesh.vertices[face[0]];
-                float[] b = rock.mesh.vertices[face[1]];
-                float[] c = rock.mesh.vertices[face[2]];
+                Matrix4f matrix = poseStack.last().pose();
+                org.joml.Matrix3f normalMatrix = poseStack.last().normal();
 
-                float ux = b[0] - a[0];
-                float uy = b[1] - a[1];
-                float uz = b[2] - a[2];
-                float vx = c[0] - a[0];
-                float vy = c[1] - a[1];
-                float vz = c[2] - a[2];
-
-                float nx = uy * vz - uz * vy;
-                float ny = uz * vx - ux * vz;
-                float nz = ux * vy - uy * vx;
-                float normalLength = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-                if (normalLength < 1.0E-5F) continue;
-                nx /= normalLength;
-                ny /= normalLength;
-                nz /= normalLength;
-
-                float faceCenterX = (a[0] + b[0] + c[0]) / 3.0F;
-                float faceCenterY = (a[1] + b[1] + c[1]) / 3.0F;
-                float faceCenterZ = (a[2] + b[2] + c[2]) / 3.0F;
-                if (nx * faceCenterX + ny * faceCenterY + nz * faceCenterZ < 0.0F) {
-                    float[] swap = b;
-                    b = c;
-                    c = swap;
-                    nx = -nx;
-                    ny = -ny;
-                    nz = -nz;
+                float centerX = 0.0F, centerY = 0.0F, centerZ = 0.0F;
+                for (float[] vertex : rock.mesh.vertices) {
+                    centerX += vertex[0];
+                    centerY += vertex[1];
+                    centerZ += vertex[2];
                 }
+                centerX /= rock.mesh.vertices.length;
+                centerY /= rock.mesh.vertices.length;
+                centerZ /= rock.mesh.vertices.length;
 
-                float diffuse = Math.max(0.0F, nx * -0.38F + ny * 0.84F + nz * 0.38F);
-                float shade = 0.30F + diffuse * 0.70F;
-                float variation = 0.84F + ((face[0] * 17 + face[1] * 11 + face[2] * 7) & 7) * 0.018F;
-                int color = (int) (235.0F * Math.min(1.0F, shade * variation));
+                for (int[] face : rock.mesh.faces) {
+                    float[] a = rock.mesh.vertices[face[0]];
+                    float[] b = rock.mesh.vertices[face[1]];
+                    float[] c = rock.mesh.vertices[face[2]];
 
-                float[][] triangle = {a, b, c};
-                for (int vertex = 0; vertex < 3; vertex++) {
-                    float[] point = triangle[vertex];
-                    float[] uv = TRIANGLE_UV[vertex];
-                    consumer.vertex(matrix, point[0], point[1], point[2])
-                            .color(color, color, color, alphaByte)
-                            .uv(stoneSprite.getU(uv[0]), stoneSprite.getV(uv[1]))
-                            .overlayCoords(OverlayTexture.NO_OVERLAY)
-                            .uv2(LightTexture.FULL_BRIGHT)
-                            .normal(poseStack.last().normal(), nx, ny, nz)
-                            .endVertex();
+                    float ux = b[0] - a[0];
+                    float uy = b[1] - a[1];
+                    float uz = b[2] - a[2];
+                    float vx = c[0] - a[0];
+                    float vy = c[1] - a[1];
+                    float vz = c[2] - a[2];
+
+                    float nx = uy * vz - uz * vy;
+                    float ny = uz * vx - ux * vz;
+                    float nz = ux * vy - uy * vx;
+                    float normalLength = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                    if (normalLength < 1.0E-5F) continue;
+                    nx /= normalLength;
+                    ny /= normalLength;
+                    nz /= normalLength;
+
+                    float faceCenterX = (a[0] + b[0] + c[0]) / 3.0F - centerX;
+                    float faceCenterY = (a[1] + b[1] + c[1]) / 3.0F - centerY;
+                    float faceCenterZ = (a[2] + b[2] + c[2]) / 3.0F - centerZ;
+                    if (nx * faceCenterX + ny * faceCenterY + nz * faceCenterZ < 0.0F) {
+                        float[] swap = b;
+                        b = c;
+                        c = swap;
+                        nx = -nx;
+                        ny = -ny;
+                        nz = -nz;
+                    }
+
+                    float diffuse = Math.max(0.0F, nx * -0.38F + ny * 0.84F + nz * 0.38F);
+                    float shade = 0.24F + diffuse * 0.76F;
+                    float variation = 0.82F + ((face[0] * 17 + face[1] * 11 + face[2] * 7) & 7) * 0.022F;
+                    int color = (int) (235.0F * Math.min(1.0F, shade * variation));
+
+                    // IMPORTANT: entityTranslucent uses QUADS. Sending only three
+                    // vertices per face corrupts the quad stream: the next face's
+                    // first vertex is consumed as this quad's fourth vertex. That
+                    // creates the giant screen-spanning stretched polygons.
+                    // Encode each triangle as a degenerate quad (A,B,C,C).
+                    emitRockTriangle(consumer, matrix, normalMatrix, stoneSprite,
+                            a, b, c, color, alphaByte, nx, ny, nz);
                 }
+            } finally {
+                poseStack.popPose();
             }
-
-            poseStack.popPose();
         }
 
+        // Flush only this render type; do not leave an unfinished vertex batch.
         buffer.endBatch(ROCK_RENDER_TYPE);
+    }
+
+    private static void emitRockTriangle(VertexConsumer consumer,
+                                         Matrix4f matrix,
+                                         org.joml.Matrix3f normalMatrix,
+                                         TextureAtlasSprite sprite,
+                                         float[] a, float[] b, float[] c,
+                                         int color, int alpha,
+                                         float nx, float ny, float nz) {
+        emitRockVertex(consumer, matrix, normalMatrix, sprite, a, TRIANGLE_UV[0],
+                color, alpha, nx, ny, nz);
+        emitRockVertex(consumer, matrix, normalMatrix, sprite, b, TRIANGLE_UV[1],
+                color, alpha, nx, ny, nz);
+        emitRockVertex(consumer, matrix, normalMatrix, sprite, c, TRIANGLE_UV[2],
+                color, alpha, nx, ny, nz);
+        // A duplicate last vertex completes the QUADS primitive without adding
+        // a second visible triangle (the fourth vertex makes a degenerate one).
+        emitRockVertex(consumer, matrix, normalMatrix, sprite, c, TRIANGLE_UV[2],
+                color, alpha, nx, ny, nz);
+    }
+
+    private static void emitRockVertex(VertexConsumer consumer,
+                                       Matrix4f matrix,
+                                       org.joml.Matrix3f normalMatrix,
+                                       TextureAtlasSprite sprite,
+                                       float[] point, float[] uv,
+                                       int color, int alpha,
+                                       float nx, float ny, float nz) {
+        consumer.vertex(matrix, point[0], point[1], point[2])
+                .color(color, color, color, alpha)
+                .uv(sprite.getU(uv[0]), sprite.getV(uv[1]))
+                .overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, nx, ny, nz)
+                .endVertex();
     }
 
     public static void applyCameraShake(PoseStack poseStack, float partialTick) {

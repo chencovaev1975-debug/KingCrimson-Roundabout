@@ -235,5 +235,5 @@ audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavol
 audio_target.parent.mkdir(parents=True, exist_ok=True)
 audio_target.write_bytes(audio_bytes)
 print(f"Installed Diavolo theme audio asset from {audio_asset.name}.")
-print("Applied the 20-block exposed-scene snapshot and the faceted stone burst.")
+print("Applied the 30-block exposed-scene snapshot and the ground-launched giant stone burst.")
 

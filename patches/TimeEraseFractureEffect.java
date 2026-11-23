@@ -17,8 +17,10 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
@@ -33,15 +35,17 @@ import java.util.Random;
  */
 public final class TimeEraseFractureEffect {
     private static final int RADIUS = 60;
-    private static final int VERTICAL_RANGE_DOWN = 18;
-    private static final int VERTICAL_RANGE_UP = 14;
-    private static final int MAX_BLOCKS = 4200;
+    private static final int MAX_BLOCKS = 12000;
     private static final int BAND_COUNT = 6;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
-    private static final int[] BAND_CAPS = {120, 360, 600, 840, 1080, MAX_BLOCKS - 3000};
+    // Each ring has enough capacity to retain every terrain column (no sparse sampling).
+    private static final int[] BAND_CAPS = {320, 950, 1580, 2220, 2840, 3460};
     private static final int CRACKS_REACH_TICK = 36;
-    private static final int SHATTER_TICK = 48; // 2.40 seconds at 20 TPS
-    private static final int FINISH_TICK = 60;  // 3.00 seconds at 20 TPS
+    private static final int SHATTER_TICK = 46; // 2.30 seconds at 20 TPS
+    private static final int CAMERA_SHAKE_END_TICK = 60;
+    private static final int SHARD_HOVER_TICKS = 12;
+    private static final int SHARD_FADE_TICKS = 20;
+    private static final int FINISH_TICK = 78;  // 3.90 seconds; gives detached chips time to hover and fade
 
     private static final int[] DX = {0, 0, 0, 0, -1, 1};
     private static final int[] DY = {1, -1, 0, 0, 0, 0};
@@ -142,11 +146,9 @@ public final class TimeEraseFractureEffect {
                 ^ cy ^ (0x4B435246L + bandIndex * 0x9E3779B9L));
         List<BlockSnapshot> reservoir = new ArrayList<>(capacity);
         int seen = 0;
-        int minY = Math.max(level.getMinBuildHeight(), cy - VERTICAL_RANGE_DOWN);
-        int maxY = Math.min(level.getMaxBuildHeight() - 1, cy + VERTICAL_RANGE_UP);
 
-        // Split the 60-block scan into six 10-block rings. Each ring is scanned on
-        // a separate client tick, avoiding one large hitch when Time Erase begins.
+        // Every X/Z column contributes only its highest terrain block. Tree trunks and
+        // leaves are ignored, so the temporary scene contains the ground surface only.
         for (int x = cx - outerRadius; x <= cx + outerRadius; x++) {
             int dx = x - cx;
             for (int z = cz - outerRadius; z <= cz + outerRadius; z++) {
@@ -155,32 +157,28 @@ public final class TimeEraseFractureEffect {
                 if (distanceSquared > outerSquared
                         || (bandIndex > 0 && distanceSquared <= innerSquared)) continue;
 
-                for (int y = minY; y <= maxY; y++) {
-                    BlockPos pos = new BlockPos(x, y, z);
-                    BlockState state = level.getBlockState(pos);
-                    if (state.isAir() || !state.getFluidState().isEmpty()) continue;
+                int surfaceY = findTerrainSurfaceY(level, x, z);
+                if (surfaceY == Integer.MIN_VALUE) continue;
 
-                    int faceMask = 0;
-                    for (int face = 0; face < 6; face++) {
-                        BlockPos neighborPos = new BlockPos(
-                                x + DX[face], y + DY[face], z + DZ[face]
-                        );
-                        BlockState neighbor = level.getBlockState(neighborPos);
-                        if (!neighbor.isSolidRender(level, neighborPos)) {
-                            faceMask |= 1 << face;
-                        }
-                    }
-                    if (faceMask == 0) continue;
+                BlockPos pos = new BlockPos(x, surfaceY, z);
+                BlockState state = level.getBlockState(pos);
+                int faceMask = 1; // UP: the top surface is always exposed.
 
-                    seen++;
-                    if (reservoir.size() < capacity) {
-                        reservoir.add(new BlockSnapshot(x, y, z, state, faceMask));
-                    } else {
-                        int replace = random.nextInt(seen);
-                        if (replace < capacity) {
-                            reservoir.set(replace, new BlockSnapshot(x, y, z, state, faceMask));
-                        }
-                    }
+                // Add only side walls where the neighbouring terrain column is lower.
+                // There is deliberately no DOWN face: underground blocks never enter
+                // the snapshot and the underside of the surface is not fractured.
+                if (findTerrainSurfaceY(level, x, z - 1) < surfaceY) faceMask |= 1 << 2;
+                if (findTerrainSurfaceY(level, x, z + 1) < surfaceY) faceMask |= 1 << 3;
+                if (findTerrainSurfaceY(level, x - 1, z) < surfaceY) faceMask |= 1 << 4;
+                if (findTerrainSurfaceY(level, x + 1, z) < surfaceY) faceMask |= 1 << 5;
+
+                seen++;
+                BlockSnapshot snapshot = new BlockSnapshot(x, surfaceY, z, state, faceMask);
+                if (reservoir.size() < capacity) {
+                    reservoir.add(snapshot);
+                } else {
+                    int replace = random.nextInt(seen);
+                    if (replace < capacity) reservoir.set(replace, snapshot);
                 }
             }
         }
@@ -190,6 +188,22 @@ public final class TimeEraseFractureEffect {
         }
     }
 
+    private static int findTerrainSurfaceY(ClientLevel level, int x, int z) {
+        int topY = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
+        for (int y = topY; y >= level.getMinBuildHeight(); y--) {
+            BlockPos pos = new BlockPos(x, y, z);
+            BlockState state = level.getBlockState(pos);
+            if (state.isAir()
+                    || !state.getFluidState().isEmpty()
+                    || state.is(BlockTags.LEAVES)
+                    || state.is(BlockTags.LOGS)
+                    || !state.isSolidRender(level, pos)) {
+                continue;
+            }
+            return y;
+        }
+        return Integer.MIN_VALUE;
+    }
     public static void render(PoseStack poseStack, MultiBufferSource.BufferSource buffer,
                               Camera camera, float partialTick) {
         if (!effectActive || BLOCKS.isEmpty() || !ClientUtil.renderTimeErase()) return;
@@ -200,11 +214,8 @@ public final class TimeEraseFractureEffect {
             renderIntactBlocks(poseStack, buffer, view);
             buffer.endBatch();
             renderCracks(poseStack, view, partialTick);
-            if (elapsedTicks >= SHATTER_TICK - 6) {
-                renderShards(poseStack, view, partialTick, true);
-            }
         } else {
-            renderShards(poseStack, view, partialTick, false);
+            renderShards(poseStack, view, partialTick);
         }
     }
 
@@ -237,55 +248,126 @@ public final class TimeEraseFractureEffect {
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         RenderSystem.depthMask(false);
+        RenderSystem.disableCull();
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
-        RenderSystem.lineWidth(1.8F);
 
         poseStack.pushPose();
         poseStack.translate(-camera.x, -camera.y, -camera.z);
         Matrix4f matrix = poseStack.last().pose();
         Tesselator tessellator = Tesselator.getInstance();
         BufferBuilder builder = tessellator.getBuilder();
-        builder.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR);
+        builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
 
         float now = elapsedTicks + partialTick;
         for (BlockRecord record : BLOCKS) {
             if (!isInView(record, camera)) continue;
             float reveal = now - record.crackStartTick;
             if (reveal <= 0.0F) continue;
-            float alpha = Math.min(1.0F, reveal / 8.0F);
-            alpha *= 0.92F;
-            // A restrained luminance flicker just before separation; no color split or screen effect.
-            if (now >= SHATTER_TICK - 5 && now < SHATTER_TICK) {
-                float seedPhase = (record.x * 0.17F + record.y * 0.31F + record.z * 0.11F);
-                alpha *= 0.90F + 0.10F * (float) Math.sin((now - (SHATTER_TICK - 5)) * 15.0F + seedPhase);
-            }
+            float alpha = Mth.clamp(reveal / 2.5F, 0.0F, 1.0F) * 0.98F;
             float[] segments = record.crackSegments;
-            for (int i = 0; i + 5 < segments.length; i += 6) {
-                vertex(builder, matrix, record.x + segments[i], record.y + segments[i + 1],
-                        record.z + segments[i + 2], 0.055F, 0.060F, 0.065F, alpha);
-                vertex(builder, matrix, record.x + segments[i + 3], record.y + segments[i + 4],
-                        record.z + segments[i + 5], 0.055F, 0.060F, 0.065F, alpha);
+
+            // Eight values per segment: face index, two local-space endpoints, half-width.
+            for (int i = 0; i + 7 < segments.length; i += 8) {
+                int face = (int) segments[i];
+                float x0 = record.x + segments[i + 1];
+                float y0 = record.y + segments[i + 2];
+                float z0 = record.z + segments[i + 3];
+                float x1 = record.x + segments[i + 4];
+                float y1 = record.y + segments[i + 5];
+                float z1 = record.z + segments[i + 6];
+                float halfWidth = segments[i + 7];
+                emitCrackRibbon(builder, matrix, x0, y0, z0, x1, y1, z1,
+                        NORMAL[face][0], NORMAL[face][1], NORMAL[face][2],
+                        halfWidth, alpha);
             }
         }
 
         BufferUploader.drawWithShader(builder.end());
         poseStack.popPose();
-        RenderSystem.lineWidth(1.0F);
+        RenderSystem.enableCull();
         RenderSystem.depthMask(true);
         RenderSystem.disableBlend();
     }
 
+    private static void emitCrackRibbon(BufferBuilder builder, Matrix4f matrix,
+                                        float x0, float y0, float z0,
+                                        float x1, float y1, float z1,
+                                        float nx, float ny, float nz,
+                                        float halfWidth, float alpha) {
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float dz = z1 - z0;
+
+        // Perpendicular direction stays in the block face plane.
+        float px = ny * dz - nz * dy;
+        float py = nz * dx - nx * dz;
+        float pz = nx * dy - ny * dx;
+        float length = (float) Math.sqrt(px * px + py * py + pz * pz);
+        if (length < 1.0E-5F) return;
+        px /= length;
+        py /= length;
+        pz /= length;
+
+        // A dark recessed outer groove, a near-black core, and narrow raised lips
+        // create visible width and depth from real generated geometry (not a texture).
+        emitCrackLayer(builder, matrix, x0, y0, z0, x1, y1, z1,
+                nx, ny, nz, px, py, pz, halfWidth * 1.34F, 0.008F,
+                0.030F, 0.032F, 0.035F, alpha);
+        emitCrackLayer(builder, matrix, x0, y0, z0, x1, y1, z1,
+                nx, ny, nz, px, py, pz, halfWidth * 0.78F, 0.012F,
+                0.004F, 0.005F, 0.006F, alpha);
+        emitCrackLayer(builder, matrix, x0, y0, z0, x1, y1, z1,
+                nx, ny, nz, px, py, pz, halfWidth * 0.10F, 0.014F,
+                0.135F, 0.140F, 0.145F, alpha,
+                px * halfWidth * 0.91F, py * halfWidth * 0.91F, pz * halfWidth * 0.91F);
+        emitCrackLayer(builder, matrix, x0, y0, z0, x1, y1, z1,
+                nx, ny, nz, px, py, pz, halfWidth * 0.08F, 0.010F,
+                0.080F, 0.085F, 0.090F, alpha,
+                -px * halfWidth * 0.91F, -py * halfWidth * 0.91F, -pz * halfWidth * 0.91F);
+    }
+
+    private static void emitCrackLayer(BufferBuilder builder, Matrix4f matrix,
+                                       float x0, float y0, float z0,
+                                       float x1, float y1, float z1,
+                                       float nx, float ny, float nz,
+                                       float px, float py, float pz,
+                                       float halfWidth, float depth,
+                                       float r, float g, float b, float alpha) {
+        emitCrackLayer(builder, matrix, x0, y0, z0, x1, y1, z1,
+                nx, ny, nz, px, py, pz, halfWidth, depth, r, g, b, alpha, 0, 0, 0);
+    }
+
+    private static void emitCrackLayer(BufferBuilder builder, Matrix4f matrix,
+                                       float x0, float y0, float z0,
+                                       float x1, float y1, float z1,
+                                       float nx, float ny, float nz,
+                                       float px, float py, float pz,
+                                       float halfWidth, float depth,
+                                       float r, float g, float b, float alpha,
+                                       float shiftX, float shiftY, float shiftZ) {
+        float ox = nx * depth + shiftX;
+        float oy = ny * depth + shiftY;
+        float oz = nz * depth + shiftZ;
+        float wx = px * halfWidth;
+        float wy = py * halfWidth;
+        float wz = pz * halfWidth;
+
+        vertex(builder, matrix, x0 + ox + wx, y0 + oy + wy, z0 + oz + wz, r, g, b, alpha);
+        vertex(builder, matrix, x1 + ox + wx, y1 + oy + wy, z1 + oz + wz, r, g, b, alpha);
+        vertex(builder, matrix, x1 + ox - wx, y1 + oy - wy, z1 + oz - wz, r, g, b, alpha);
+        vertex(builder, matrix, x0 + ox - wx, y0 + oy - wy, z0 + oz - wz, r, g, b, alpha);
+    }
     private static void renderShards(PoseStack poseStack, View camera,
-                                     float partialTick, boolean embedded) {
+                                     float partialTick) {
         float now = elapsedTicks + partialTick;
-        float detachProgress = embedded
-                ? 0.0F
-                : Mth.clamp((now - SHATTER_TICK) / (float) (FINISH_TICK - SHATTER_TICK), 0.0F, 1.0F);
-        float preform = embedded
-                ? Mth.clamp((now - (SHATTER_TICK - 6)) / 6.0F, 0.0F, 1.0F)
-                : 1.0F;
-        float fade = embedded ? 1.0F : 1.0F - Mth.clamp((detachProgress - 0.32F) / 0.68F, 0.0F, 1.0F);
-        float alpha = embedded ? (0.22F + 0.78F * preform) : fade;
+        float sinceSeparation = Math.max(0.0F, now - SHATTER_TICK);
+        float drift = Mth.clamp(sinceSeparation / 12.0F, 0.0F, 1.0F);
+        float fadeProgress = Mth.clamp(
+                (sinceSeparation - SHARD_HOVER_TICKS) / (float) SHARD_FADE_TICKS,
+                0.0F, 1.0F
+        );
+        float easedFade = fadeProgress * fadeProgress * (3.0F - 2.0F * fadeProgress);
+        float alpha = 1.0F - easedFade;
         if (alpha <= 0.001F) return;
 
         RenderSystem.enableDepthTest();
@@ -304,15 +386,21 @@ public final class TimeEraseFractureEffect {
 
         for (BlockRecord record : BLOCKS) {
             if (!isInView(record, camera)) continue;
-            for (Shard shard : record.shards) {
+            for (int shardIndex = 0; shardIndex < record.shards.length; shardIndex++) {
+                Shard shard = record.shards[shardIndex];
                 if (!isFaceTowardCamera(record, shard, camera)) continue;
-                float move = detachProgress;
-                float shrink = embedded ? 1.0F : (1.0F - 0.12F * detachProgress);
-                float tx = shard.velocityX * move;
-                float ty = shard.velocityY * move;
-                float tz = shard.velocityZ * move;
+
+                // The first frame is already clearly detached. Later motion is a
+                // restrained upward drift, not an explosive scatter or rotation.
+                float phase = record.x * 0.17F + record.y * 0.31F
+                        + record.z * 0.11F + shardIndex * 1.37F;
+                float hover = (float) Math.sin(sinceSeparation * 0.34F + phase) * 0.018F;
+                float tx = shard.normalX * 0.24F + shard.velocityX * drift;
+                float ty = shard.normalY * 0.24F + 0.12F
+                        + shard.velocityY * drift + hover;
+                float tz = shard.normalZ * 0.24F + shard.velocityZ * drift;
                 emitShard(builder, matrix, record, shard, tx, ty, tz,
-                        shrink, embedded ? preform : 1.0F, alpha);
+                        1.0F, 1.0F, alpha);
             }
         }
 
@@ -322,7 +410,6 @@ public final class TimeEraseFractureEffect {
         RenderSystem.depthMask(true);
         RenderSystem.disableBlend();
     }
-
     private static void emitShard(BufferBuilder builder, Matrix4f matrix, BlockRecord record,
                                   Shard shard, float tx, float ty, float tz,
                                   float scale, float surfaceGrowth, float alpha) {
@@ -432,58 +519,70 @@ public final class TimeEraseFractureEffect {
     }
 
     private static float[] makeCrackSegments(int x, int y, int z, int faceMask, Random random) {
-        FloatBuilder values = new FloatBuilder(96);
+        FloatBuilder values = new FloatBuilder(256);
         for (int face = 0; face < 6; face++) {
             if ((faceMask & (1 << face)) == 0) continue;
             float centerU = 0.43F + random.nextFloat() * 0.14F;
             float centerV = 0.43F + random.nextFloat() * 0.14F;
-            int rays = 4 + random.nextInt(3);
+            int rays = 5 + random.nextInt(3);
             float angleOffset = random.nextFloat() * 0.5F;
+
             for (int ray = 0; ray < rays; ray++) {
                 float angle = angleOffset + ray * ((float) Math.PI * 2.0F / rays);
                 float du = (float) Math.cos(angle);
                 float dv = (float) Math.sin(angle);
-                float edgeDistance = 0.46F / Math.max(0.25F, Math.max(Math.abs(du), Math.abs(dv)));
-                float endU = Mth.clamp(centerU + du * edgeDistance, 0.035F, 0.965F);
-                float endV = Mth.clamp(centerV + dv * edgeDistance, 0.035F, 0.965F);
+                float edgeDistance = 0.49F / Math.max(0.25F, Math.max(Math.abs(du), Math.abs(dv)));
+                float endU = Mth.clamp(centerU + du * edgeDistance, 0.015F, 0.985F);
+                float endV = Mth.clamp(centerV + dv * edgeDistance, 0.015F, 0.985F);
                 float prevU = centerU;
                 float prevV = centerV;
-                int pieces = 3 + random.nextInt(2);
+                int pieces = 4 + random.nextInt(3);
+
                 for (int p = 1; p <= pieces; p++) {
                     float t = p / (float) pieces;
-                    float jitter = (1.0F - t) * 0.12F;
-                    float u = centerU + (endU - centerU) * t + (random.nextFloat() - 0.5F) * jitter;
-                    float v = centerV + (endV - centerV) * t + (random.nextFloat() - 0.5F) * jitter;
-                    addFaceSegment(values, face, prevU, prevV, u, v);
+                    float jitter = (1.0F - t) * 0.15F + 0.012F;
+                    float u = centerU + (endU - centerU) * t
+                            + (random.nextFloat() - 0.5F) * jitter;
+                    float v = centerV + (endV - centerV) * t
+                            + (random.nextFloat() - 0.5F) * jitter;
+                    float halfWidth = 0.060F + random.nextFloat() * 0.047F;
+                    addFaceSegment(values, face, prevU, prevV, u, v, halfWidth);
                     prevU = u;
                     prevV = v;
                 }
 
-                if (random.nextFloat() < 0.72F) {
-                    float branchU = centerU + (endU - centerU) * (0.32F + random.nextFloat() * 0.32F);
-                    float branchV = centerV + (endV - centerV) * (0.32F + random.nextFloat() * 0.32F);
-                    float branchAngle = angle + (random.nextBoolean() ? 1.0F : -1.0F) * (0.55F + random.nextFloat() * 0.65F);
-                    float branchEndU = Mth.clamp(branchU + (float) Math.cos(branchAngle) * 0.26F, 0.025F, 0.975F);
-                    float branchEndV = Mth.clamp(branchV + (float) Math.sin(branchAngle) * 0.26F, 0.025F, 0.975F);
-                    float midU = (branchU + branchEndU) * 0.5F + (random.nextFloat() - 0.5F) * 0.04F;
-                    float midV = (branchV + branchEndV) * 0.5F + (random.nextFloat() - 0.5F) * 0.04F;
-                    addFaceSegment(values, face, branchU, branchV, midU, midV);
-                    addFaceSegment(values, face, midU, midV, branchEndU, branchEndV);
+                if (random.nextFloat() < 0.86F) {
+                    float branchU = centerU + (endU - centerU) * (0.30F + random.nextFloat() * 0.38F);
+                    float branchV = centerV + (endV - centerV) * (0.30F + random.nextFloat() * 0.38F);
+                    float branchAngle = angle + (random.nextBoolean() ? 1.0F : -1.0F)
+                            * (0.58F + random.nextFloat() * 0.70F);
+                    float branchEndU = Mth.clamp(branchU + (float) Math.cos(branchAngle) * 0.30F,
+                            0.015F, 0.985F);
+                    float branchEndV = Mth.clamp(branchV + (float) Math.sin(branchAngle) * 0.30F,
+                            0.015F, 0.985F);
+                    float midU = (branchU + branchEndU) * 0.5F
+                            + (random.nextFloat() - 0.5F) * 0.055F;
+                    float midV = (branchV + branchEndV) * 0.5F
+                            + (random.nextFloat() - 0.5F) * 0.055F;
+                    float branchWidth = 0.042F + random.nextFloat() * 0.035F;
+                    addFaceSegment(values, face, branchU, branchV, midU, midV, branchWidth);
+                    addFaceSegment(values, face, midU, midV, branchEndU, branchEndV, branchWidth * 0.88F);
                 }
             }
         }
-
         return values.toArray();
     }
 
     private static void addFaceSegment(FloatBuilder output, int face,
-                                       float u0, float v0, float u1, float v1) {
+                                       float u0, float v0, float u1, float v1,
+                                       float halfWidth) {
         float[] a = facePoint(face, u0, v0, 0.006F);
         float[] b = facePoint(face, u1, v1, 0.006F);
+        output.add(face);
         output.add(a[0]); output.add(a[1]); output.add(a[2]);
         output.add(b[0]); output.add(b[1]); output.add(b[2]);
+        output.add(halfWidth);
     }
-
     private static float[] facePoint(int face, float u, float v, float depth) {
         float[] o = FACE_ORIGIN[face];
         float[] n = NORMAL[face];
@@ -516,7 +615,7 @@ public final class TimeEraseFractureEffect {
             int sides = 3 + random.nextInt(3);
             float centerU = 0.30F + random.nextFloat() * 0.40F;
             float centerV = 0.30F + random.nextFloat() * 0.40F;
-            float radius = 0.12F + random.nextFloat() * 0.09F;
+            float radius = (0.12F + random.nextFloat() * 0.09F) * 5.0F;
             float rotation = random.nextFloat() * (float) Math.PI * 2.0F;
             float[] vertices = new float[sides * 6];
 
@@ -535,9 +634,11 @@ public final class TimeEraseFractureEffect {
                 vertices[base + 3] = front[0]; vertices[base + 4] = front[1]; vertices[base + 5] = front[2];
             }
 
-            float vx = radialX * (0.18F + random.nextFloat() * 0.18F) + (random.nextFloat() - 0.5F) * 0.16F;
-            float vz = radialZ * (0.18F + random.nextFloat() * 0.18F) + (random.nextFloat() - 0.5F) * 0.16F;
-            float vy = 0.42F + random.nextFloat() * 0.28F;
+            float vx = radialX * (0.035F + random.nextFloat() * 0.025F)
+                    + (random.nextFloat() - 0.5F) * 0.035F;
+            float vz = radialZ * (0.035F + random.nextFloat() * 0.025F)
+                    + (random.nextFloat() - 0.5F) * 0.035F;
+            float vy = 0.025F + random.nextFloat() * 0.040F;
             float tone = 0.27F + random.nextFloat() * 0.13F;
             shards[shardIndex] = new Shard(vertices, sides, vx, vy, vz, tone,
                     NORMAL[face][0], NORMAL[face][1], NORMAL[face][2]);
@@ -571,10 +672,11 @@ public final class TimeEraseFractureEffect {
     private static float cameraShake(float partialTick) {
         if (!effectActive) return 0.0F;
         float t = elapsedTicks + partialTick;
-        if (t < SHATTER_TICK || t >= FINISH_TICK) return 0.0F;
-        float progress = (t - SHATTER_TICK) / (float) (FINISH_TICK - SHATTER_TICK);
-        float envelope = (1.0F - progress) * (1.0F - progress);
-        return (float) Math.sin((t - SHATTER_TICK) * 1.57F) * 0.075F * envelope;
+        if (t < SHATTER_TICK || t >= CAMERA_SHAKE_END_TICK) return 0.0F;
+        float progress = (t - SHATTER_TICK)
+                / (float) (CAMERA_SHAKE_END_TICK - SHATTER_TICK);
+        float envelope = (float) Math.pow(1.0F - progress, 1.35D);
+        return (float) Math.sin((t - SHATTER_TICK) * 2.15F) * 0.22F * envelope;
     }
 
     private static boolean isFaceTowardCamera(BlockRecord record, Shard shard, View view) {

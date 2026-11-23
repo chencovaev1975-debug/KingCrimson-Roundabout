@@ -1,0 +1,707 @@
+package net.hydra.jojomod.client;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.minecraft.class_2338;
+import net.minecraft.class_243;
+import net.minecraft.class_2680;
+import net.minecraft.class_286;
+import net.minecraft.class_287;
+import net.minecraft.class_289;
+import net.minecraft.class_290;
+import net.minecraft.class_293;
+import net.minecraft.class_310;
+import net.minecraft.class_3532;
+import net.minecraft.class_4184;
+import net.minecraft.class_4587;
+import net.minecraft.class_4597;
+import net.minecraft.class_4608;
+import net.minecraft.class_638;
+import net.minecraft.class_746;
+import net.minecraft.class_757;
+import net.minecraft.class_761;
+import net.minecraft.class_776;
+import org.joml.Matrix4f;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
+/**
+ * Client-only Time Erase fracture pass.
+ * It snapshots nearby exposed block states without changing the world, then renders
+ * those blocks, their cracks, and small non-rotating stone chips over the native void.
+ */
+public final class TimeEraseFractureEffect {
+    private static final int RADIUS = 60;
+    private static final int VERTICAL_RANGE_DOWN = 18;
+    private static final int VERTICAL_RANGE_UP = 14;
+    private static final int MAX_BLOCKS = 4200;
+    private static final int BAND_COUNT = 6;
+    private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
+    private static final int[] BAND_CAPS = {120, 360, 600, 840, 1080, MAX_BLOCKS - 3000};
+    private static final int CRACKS_REACH_TICK = 36;
+    private static final int SHATTER_TICK = 48; // 2.40 seconds at 20 TPS
+    private static final int FINISH_TICK = 60;  // 3.00 seconds at 20 TPS
+
+    private static final int[] DX = {0, 0, 0, 0, -1, 1};
+    private static final int[] DY = {1, -1, 0, 0, 0, 0};
+    private static final int[] DZ = {0, 0, -1, 1, 0, 0};
+
+    // A face-local basis for UP, DOWN, NORTH, SOUTH, WEST, EAST.
+    private static final float[][] NORMAL = {
+            {0, 1, 0}, {0, -1, 0}, {0, 0, -1},
+            {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}
+    };
+    private static final float[][] U_AXIS = {
+            {1, 0, 0}, {1, 0, 0}, {1, 0, 0},
+            {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}
+    };
+    private static final float[][] V_AXIS = {
+            {0, 0, -1}, {0, 0, 1}, {0, 1, 0},
+            {0, 1, 0}, {0, 1, 0}, {0, 1, 0}
+    };
+
+    private static final float[][] FACE_ORIGIN = {
+            {0.5F, 1.0F, 0.5F}, {0.5F, 0.0F, 0.5F},
+            {0.5F, 0.5F, 0.0F}, {0.5F, 0.5F, 1.0F},
+            {0.0F, 0.5F, 0.5F}, {1.0F, 0.5F, 0.5F}
+    };
+
+    private static final List<BlockRecord> BLOCKS = new ArrayList<>();
+    private static boolean previousAbilityActive;
+    private static boolean effectActive;
+    private static int elapsedTicks;
+    private static class_638 capturedLevel;
+    private static double centerX;
+    private static double centerY;
+    private static double centerZ;
+    private static float appliedCameraShake;
+
+    private TimeEraseFractureEffect() {}
+
+    public static void tick(class_746 player, boolean abilityActive) {
+        if (player == null) {
+            reset();
+            return;
+        }
+
+        class_638 level = (class_638) player.method_37908();
+        if (capturedLevel != null && capturedLevel != level) {
+            reset();
+        }
+
+        if (abilityActive && !previousAbilityActive) {
+            begin(player, level);
+        } else if (effectActive) {
+            elapsedTicks++;
+            if (elapsedTicks < BAND_COUNT && capturedLevel != null) {
+                captureBand(capturedLevel,
+                        (int) Math.floor(centerX), (int) Math.floor(centerY),
+                        (int) Math.floor(centerZ), elapsedTicks);
+            }
+            if (elapsedTicks >= FINISH_TICK) {
+                effectActive = false;
+                BLOCKS.clear();
+            }
+        }
+
+        previousAbilityActive = abilityActive;
+    }
+
+    private static void begin(class_746 player, class_638 level) {
+        BLOCKS.clear();
+        capturedLevel = level;
+        centerX = player.method_23317();
+        centerY = player.method_23318();
+        centerZ = player.method_23321();
+        elapsedTicks = 0;
+        effectActive = true;
+        appliedCameraShake = 0.0F;
+        captureBand(level, (int) Math.floor(centerX), (int) Math.floor(centerY),
+                (int) Math.floor(centerZ), 0);
+    }
+
+    public static void reset() {
+        BLOCKS.clear();
+        capturedLevel = null;
+        previousAbilityActive = false;
+        effectActive = false;
+        elapsedTicks = 0;
+        appliedCameraShake = 0.0F;
+    }
+
+    private static void captureBand(class_638 level, int cx, int cy, int cz, int bandIndex) {
+        if (bandIndex < 0 || bandIndex >= BAND_COUNT) return;
+
+        int outerRadius = Math.min(RADIUS, (bandIndex + 1) * BAND_RADIUS);
+        int innerRadius = bandIndex * BAND_RADIUS;
+        int outerSquared = outerRadius * outerRadius;
+        int innerSquared = innerRadius * innerRadius;
+        int capacity = BAND_CAPS[bandIndex];
+        Random random = new Random((((long) cx) << 32) ^ (((long) cz) << 1)
+                ^ cy ^ (0x4B435246L + bandIndex * 0x9E3779B9L));
+        List<BlockSnapshot> reservoir = new ArrayList<>(capacity);
+        int seen = 0;
+        int minY = Math.max(level.method_31607(), cy - VERTICAL_RANGE_DOWN);
+        int maxY = Math.min(level.method_31600() - 1, cy + VERTICAL_RANGE_UP);
+
+        // Split the 60-block scan into six 10-block rings. Each ring is scanned on
+        // a separate client tick, avoiding one large hitch when Time Erase begins.
+        for (int x = cx - outerRadius; x <= cx + outerRadius; x++) {
+            int dx = x - cx;
+            for (int z = cz - outerRadius; z <= cz + outerRadius; z++) {
+                int dz = z - cz;
+                int distanceSquared = dx * dx + dz * dz;
+                if (distanceSquared > outerSquared
+                        || (bandIndex > 0 && distanceSquared <= innerSquared)) continue;
+
+                for (int y = minY; y <= maxY; y++) {
+                    class_2338 pos = new class_2338(x, y, z);
+                    class_2680 state = level.method_8320(pos);
+                    if (state.method_26215() || !state.method_26227().method_15769()) continue;
+
+                    int faceMask = 0;
+                    for (int face = 0; face < 6; face++) {
+                        class_2338 neighborPos = new class_2338(
+                                x + DX[face], y + DY[face], z + DZ[face]
+                        );
+                        class_2680 neighbor = level.method_8320(neighborPos);
+                        if (!neighbor.method_26216(level, neighborPos)) {
+                            faceMask |= 1 << face;
+                        }
+                    }
+                    if (faceMask == 0) continue;
+
+                    seen++;
+                    if (reservoir.size() < capacity) {
+                        reservoir.add(new BlockSnapshot(x, y, z, state, faceMask));
+                    } else {
+                        int replace = random.nextInt(seen);
+                        if (replace < capacity) {
+                            reservoir.set(replace, new BlockSnapshot(x, y, z, state, faceMask));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (BlockSnapshot snapshot : reservoir) {
+            BLOCKS.add(new BlockRecord(level, snapshot, cx, cz));
+        }
+    }
+
+    public static void render(class_4587 poseStack, class_4597.class_4598 buffer,
+                              class_4184 camera, float partialTick) {
+        if (!effectActive || BLOCKS.isEmpty() || !ClientUtil.renderTimeErase()) return;
+
+        View view = new View(camera);
+
+        if (elapsedTicks < SHATTER_TICK) {
+            renderIntactBlocks(poseStack, buffer, view);
+            buffer.method_22993();
+            renderCracks(poseStack, view, partialTick);
+            if (elapsedTicks >= SHATTER_TICK - 6) {
+                renderShards(poseStack, view, partialTick, true);
+            }
+        } else {
+            renderShards(poseStack, view, partialTick, false);
+        }
+    }
+
+    private static void renderIntactBlocks(class_4587 poseStack, class_4597 buffer,
+                                           View camera) {
+        class_310 minecraft = class_310.method_1551();
+        class_776 dispatcher = minecraft.method_1541();
+        for (BlockRecord record : BLOCKS) {
+            if (!isInView(record, camera)) continue;
+            poseStack.method_22903();
+            poseStack.method_22904(
+                    record.x - camera.x,
+                    record.y - camera.y,
+                    record.z - camera.z
+            );
+            dispatcher.method_3353(
+                    record.state,
+                    poseStack,
+                    buffer,
+                    record.packedLight,
+                    class_4608.field_21444
+            );
+            poseStack.method_22909();
+        }
+    }
+
+    private static void renderCracks(class_4587 poseStack, View camera,
+                                     float partialTick) {
+        RenderSystem.enableDepthTest();
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.depthMask(false);
+        RenderSystem.setShader(class_757::method_34540);
+        RenderSystem.lineWidth(1.8F);
+
+        poseStack.method_22903();
+        poseStack.method_22904(-camera.x, -camera.y, -camera.z);
+        Matrix4f matrix = poseStack.method_23760().method_23761();
+        class_289 tessellator = class_289.method_1348();
+        class_287 builder = tessellator.method_1349();
+        builder.method_1328(class_293.class_5596.field_29344, class_290.field_1576);
+
+        float now = elapsedTicks + partialTick;
+        for (BlockRecord record : BLOCKS) {
+            if (!isInView(record, camera)) continue;
+            float reveal = now - record.crackStartTick;
+            if (reveal <= 0.0F) continue;
+            float alpha = Math.min(1.0F, reveal / 8.0F);
+            alpha *= 0.92F;
+            // A restrained luminance flicker just before separation; no color split or screen effect.
+            if (now >= SHATTER_TICK - 5 && now < SHATTER_TICK) {
+                float seedPhase = (record.x * 0.17F + record.y * 0.31F + record.z * 0.11F);
+                alpha *= 0.90F + 0.10F * (float) Math.sin((now - (SHATTER_TICK - 5)) * 15.0F + seedPhase);
+            }
+            float[] segments = record.crackSegments;
+            for (int i = 0; i + 5 < segments.length; i += 6) {
+                vertex(builder, matrix, record.x + segments[i], record.y + segments[i + 1],
+                        record.z + segments[i + 2], 0.055F, 0.060F, 0.065F, alpha);
+                vertex(builder, matrix, record.x + segments[i + 3], record.y + segments[i + 4],
+                        record.z + segments[i + 5], 0.055F, 0.060F, 0.065F, alpha);
+            }
+        }
+
+        class_286.method_43433(builder.method_1326());
+        poseStack.method_22909();
+        RenderSystem.lineWidth(1.0F);
+        RenderSystem.depthMask(true);
+        RenderSystem.disableBlend();
+    }
+
+    private static void renderShards(class_4587 poseStack, View camera,
+                                     float partialTick, boolean embedded) {
+        float now = elapsedTicks + partialTick;
+        float detachProgress = embedded
+                ? 0.0F
+                : class_3532.method_15363((now - SHATTER_TICK) / (float) (FINISH_TICK - SHATTER_TICK), 0.0F, 1.0F);
+        float preform = embedded
+                ? class_3532.method_15363((now - (SHATTER_TICK - 6)) / 6.0F, 0.0F, 1.0F)
+                : 1.0F;
+        float fade = embedded ? 1.0F : 1.0F - class_3532.method_15363((detachProgress - 0.32F) / 0.68F, 0.0F, 1.0F);
+        float alpha = embedded ? (0.22F + 0.78F * preform) : fade;
+        if (alpha <= 0.001F) return;
+
+        RenderSystem.enableDepthTest();
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.depthMask(true);
+        RenderSystem.disableCull();
+        RenderSystem.setShader(class_757::method_34540);
+
+        poseStack.method_22903();
+        poseStack.method_22904(-camera.x, -camera.y, -camera.z);
+        Matrix4f matrix = poseStack.method_23760().method_23761();
+        class_289 tessellator = class_289.method_1348();
+        class_287 builder = tessellator.method_1349();
+        builder.method_1328(class_293.class_5596.field_27382, class_290.field_1576);
+
+        for (BlockRecord record : BLOCKS) {
+            if (!isInView(record, camera)) continue;
+            for (Shard shard : record.shards) {
+                if (!isFaceTowardCamera(record, shard, camera)) continue;
+                float move = detachProgress;
+                float shrink = embedded ? 1.0F : (1.0F - 0.12F * detachProgress);
+                float tx = shard.velocityX * move;
+                float ty = shard.velocityY * move;
+                float tz = shard.velocityZ * move;
+                emitShard(builder, matrix, record, shard, tx, ty, tz,
+                        shrink, embedded ? preform : 1.0F, alpha);
+            }
+        }
+
+        class_286.method_43433(builder.method_1326());
+        poseStack.method_22909();
+        RenderSystem.enableCull();
+        RenderSystem.depthMask(true);
+        RenderSystem.disableBlend();
+    }
+
+    private static void emitShard(class_287 builder, Matrix4f matrix, BlockRecord record,
+                                  Shard shard, float tx, float ty, float tz,
+                                  float scale, float surfaceGrowth, float alpha) {
+        int n = shard.vertexCount;
+        float[] vertices = shard.vertices;
+        float cx = record.x + 0.5F + tx;
+        float cy = record.y + 0.5F + ty;
+        float cz = record.z + 0.5F + tz;
+
+        float[] back = new float[n * 3];
+        float[] front = new float[n * 3];
+        for (int i = 0; i < n; i++) {
+            int base = i * 6;
+            float backX = vertices[base] - 0.5F;
+            float backY = vertices[base + 1] - 0.5F;
+            float backZ = vertices[base + 2] - 0.5F;
+            float frontX = vertices[base + 3] - 0.5F;
+            float frontY = vertices[base + 4] - 0.5F;
+            float frontZ = vertices[base + 5] - 0.5F;
+            if (surfaceGrowth < 1.0F) {
+                float backDepth = backX * shard.normalX + backY * shard.normalY
+                        + backZ * shard.normalZ - 0.5F;
+                float frontDepth = frontX * shard.normalX + frontY * shard.normalY
+                        + frontZ * shard.normalZ - 0.5F;
+                if (backDepth > 0.0F) {
+                    float correction = backDepth * (surfaceGrowth - 1.0F);
+                    backX += shard.normalX * correction;
+                    backY += shard.normalY * correction;
+                    backZ += shard.normalZ * correction;
+                }
+                if (frontDepth > 0.0F) {
+                    float correction = frontDepth * (surfaceGrowth - 1.0F);
+                    frontX += shard.normalX * correction;
+                    frontY += shard.normalY * correction;
+                    frontZ += shard.normalZ * correction;
+                }
+            }
+            back[i * 3] = cx + backX * scale;
+            back[i * 3 + 1] = cy + backY * scale;
+            back[i * 3 + 2] = cz + backZ * scale;
+            front[i * 3] = cx + frontX * scale;
+            front[i * 3 + 1] = cy + frontY * scale;
+            front[i * 3 + 2] = cz + frontZ * scale;
+        }
+
+        float centerBackX = 0.0F, centerBackY = 0.0F, centerBackZ = 0.0F;
+        float centerFrontX = 0.0F, centerFrontY = 0.0F, centerFrontZ = 0.0F;
+        for (int i = 0; i < n; i++) {
+            centerBackX += back[i * 3] - cx;
+            centerBackY += back[i * 3 + 1] - cy;
+            centerBackZ += back[i * 3 + 2] - cz;
+            centerFrontX += front[i * 3] - cx;
+            centerFrontY += front[i * 3 + 1] - cy;
+            centerFrontZ += front[i * 3 + 2] - cz;
+        }
+        centerBackX /= n; centerBackY /= n; centerBackZ /= n;
+        centerFrontX /= n; centerFrontY /= n; centerFrontZ /= n;
+
+        float dark = shard.darkness;
+        for (int i = 0; i < n; i++) {
+            int next = (i + 1) % n;
+            int bi = i * 3;
+            int bn = next * 3;
+            float sideShade = dark * (0.66F + ((i % 3) * 0.11F));
+            quad(builder, matrix,
+                    back[bi], back[bi + 1], back[bi + 2],
+                    back[bn], back[bn + 1], back[bn + 2],
+                    front[bn], front[bn + 1], front[bn + 2],
+                    front[bi], front[bi + 1], front[bi + 2],
+                    sideShade, sideShade + 0.012F, sideShade + 0.018F, alpha);
+
+            // The two caps are triangulated into degenerate quads to retain the
+            // existing POSITION_COLOR/QUADS pipeline without adding render types.
+            quad(builder, matrix,
+                    cx + centerBackX * scale, cy + centerBackY * scale, cz + centerBackZ * scale,
+                    back[bi], back[bi + 1], back[bi + 2],
+                    back[bn], back[bn + 1], back[bn + 2],
+                    back[bn], back[bn + 1], back[bn + 2],
+                    dark * 0.52F, dark * 0.54F, dark * 0.56F, alpha);
+            quad(builder, matrix,
+                    cx + centerFrontX * scale, cy + centerFrontY * scale, cz + centerFrontZ * scale,
+                    front[bn], front[bn + 1], front[bn + 2],
+                    front[bi], front[bi + 1], front[bi + 2],
+                    front[bi], front[bi + 1], front[bi + 2],
+                    dark * 1.04F, dark * 1.06F, dark * 1.08F, alpha);
+        }
+    }
+
+    private static void quad(class_287 builder, Matrix4f matrix,
+                             float x0, float y0, float z0,
+                             float x1, float y1, float z1,
+                             float x2, float y2, float z2,
+                             float x3, float y3, float z3,
+                             float r, float g, float b, float a) {
+        vertex(builder, matrix, x0, y0, z0, r, g, b, a);
+        vertex(builder, matrix, x1, y1, z1, r, g, b, a);
+        vertex(builder, matrix, x2, y2, z2, r, g, b, a);
+        vertex(builder, matrix, x3, y3, z3, r, g, b, a);
+    }
+
+    private static void vertex(class_287 builder, Matrix4f matrix,
+                               float x, float y, float z,
+                               float r, float g, float b, float a) {
+        builder.method_22918(matrix, x, y, z)
+                .method_22915(r, g, b, a)
+                .method_1344();
+    }
+
+    private static float[] makeCrackSegments(int x, int y, int z, int faceMask, Random random) {
+        FloatBuilder values = new FloatBuilder(96);
+        for (int face = 0; face < 6; face++) {
+            if ((faceMask & (1 << face)) == 0) continue;
+            float centerU = 0.43F + random.nextFloat() * 0.14F;
+            float centerV = 0.43F + random.nextFloat() * 0.14F;
+            int rays = 4 + random.nextInt(3);
+            float angleOffset = random.nextFloat() * 0.5F;
+            for (int ray = 0; ray < rays; ray++) {
+                float angle = angleOffset + ray * ((float) Math.PI * 2.0F / rays);
+                float du = (float) Math.cos(angle);
+                float dv = (float) Math.sin(angle);
+                float edgeDistance = 0.46F / Math.max(0.25F, Math.max(Math.abs(du), Math.abs(dv)));
+                float endU = class_3532.method_15363(centerU + du * edgeDistance, 0.035F, 0.965F);
+                float endV = class_3532.method_15363(centerV + dv * edgeDistance, 0.035F, 0.965F);
+                float prevU = centerU;
+                float prevV = centerV;
+                int pieces = 3 + random.nextInt(2);
+                for (int p = 1; p <= pieces; p++) {
+                    float t = p / (float) pieces;
+                    float jitter = (1.0F - t) * 0.12F;
+                    float u = centerU + (endU - centerU) * t + (random.nextFloat() - 0.5F) * jitter;
+                    float v = centerV + (endV - centerV) * t + (random.nextFloat() - 0.5F) * jitter;
+                    addFaceSegment(values, face, prevU, prevV, u, v);
+                    prevU = u;
+                    prevV = v;
+                }
+
+                if (random.nextFloat() < 0.72F) {
+                    float branchU = centerU + (endU - centerU) * (0.32F + random.nextFloat() * 0.32F);
+                    float branchV = centerV + (endV - centerV) * (0.32F + random.nextFloat() * 0.32F);
+                    float branchAngle = angle + (random.nextBoolean() ? 1.0F : -1.0F) * (0.55F + random.nextFloat() * 0.65F);
+                    float branchEndU = class_3532.method_15363(branchU + (float) Math.cos(branchAngle) * 0.26F, 0.025F, 0.975F);
+                    float branchEndV = class_3532.method_15363(branchV + (float) Math.sin(branchAngle) * 0.26F, 0.025F, 0.975F);
+                    float midU = (branchU + branchEndU) * 0.5F + (random.nextFloat() - 0.5F) * 0.04F;
+                    float midV = (branchV + branchEndV) * 0.5F + (random.nextFloat() - 0.5F) * 0.04F;
+                    addFaceSegment(values, face, branchU, branchV, midU, midV);
+                    addFaceSegment(values, face, midU, midV, branchEndU, branchEndV);
+                }
+            }
+        }
+
+        return values.toArray();
+    }
+
+    private static void addFaceSegment(FloatBuilder output, int face,
+                                       float u0, float v0, float u1, float v1) {
+        float[] a = facePoint(face, u0, v0, 0.006F);
+        float[] b = facePoint(face, u1, v1, 0.006F);
+        output.add(a[0]); output.add(a[1]); output.add(a[2]);
+        output.add(b[0]); output.add(b[1]); output.add(b[2]);
+    }
+
+    private static float[] facePoint(int face, float u, float v, float depth) {
+        float[] o = FACE_ORIGIN[face];
+        float[] n = NORMAL[face];
+        float[] ux = U_AXIS[face];
+        float[] vx = V_AXIS[face];
+        return new float[]{
+                o[0] + ux[0] * (u - 0.5F) + vx[0] * (v - 0.5F) + n[0] * depth,
+                o[1] + ux[1] * (u - 0.5F) + vx[1] * (v - 0.5F) + n[1] * depth,
+                o[2] + ux[2] * (u - 0.5F) + vx[2] * (v - 0.5F) + n[2] * depth
+        };
+    }
+
+    private static Shard[] makeShards(int x, int y, int z, int faceMask, Random random,
+                                     double centerX, double centerZ) {
+        int count = 2 + random.nextInt(3);
+        Shard[] shards = new Shard[count];
+        float radialX = x + 0.5F - (float) centerX;
+        float radialZ = z + 0.5F - (float) centerZ;
+        float radialLength = (float) Math.sqrt(radialX * radialX + radialZ * radialZ);
+        if (radialLength > 0.001F) {
+            radialX /= radialLength;
+            radialZ /= radialLength;
+        } else {
+            radialX = 0.0F;
+            radialZ = 0.0F;
+        }
+
+        for (int shardIndex = 0; shardIndex < count; shardIndex++) {
+            int face = randomFace(faceMask, random);
+            int sides = 3 + random.nextInt(3);
+            float centerU = 0.30F + random.nextFloat() * 0.40F;
+            float centerV = 0.30F + random.nextFloat() * 0.40F;
+            float radius = 0.12F + random.nextFloat() * 0.09F;
+            float rotation = random.nextFloat() * (float) Math.PI * 2.0F;
+            float[] vertices = new float[sides * 6];
+
+            for (int i = 0; i < sides; i++) {
+                float angle = rotation + i * ((float) Math.PI * 2.0F / sides);
+                float irregular = 0.68F + random.nextFloat() * 0.55F;
+                float u = class_3532.method_15363(centerU + (float) Math.cos(angle) * radius * irregular, 0.08F, 0.92F);
+                float v = class_3532.method_15363(centerV + (float) Math.sin(angle) * radius * irregular, 0.08F, 0.92F);
+                float backDepth = -0.10F - random.nextFloat() * 0.12F;
+                float frontDepth = 0.08F + random.nextFloat() * 0.11F;
+                float[] back = facePoint(face, u, v, backDepth);
+                float[] front = facePoint(face, u + (random.nextFloat() - 0.5F) * 0.035F,
+                        v + (random.nextFloat() - 0.5F) * 0.035F, frontDepth);
+                int base = i * 6;
+                vertices[base] = back[0]; vertices[base + 1] = back[1]; vertices[base + 2] = back[2];
+                vertices[base + 3] = front[0]; vertices[base + 4] = front[1]; vertices[base + 5] = front[2];
+            }
+
+            float vx = radialX * (0.18F + random.nextFloat() * 0.18F) + (random.nextFloat() - 0.5F) * 0.16F;
+            float vz = radialZ * (0.18F + random.nextFloat() * 0.18F) + (random.nextFloat() - 0.5F) * 0.16F;
+            float vy = 0.42F + random.nextFloat() * 0.28F;
+            float tone = 0.27F + random.nextFloat() * 0.13F;
+            shards[shardIndex] = new Shard(vertices, sides, vx, vy, vz, tone,
+                    NORMAL[face][0], NORMAL[face][1], NORMAL[face][2]);
+        }
+        return shards;
+    }
+
+    private static int randomFace(int mask, Random random) {
+        int count = Integer.bitCount(mask);
+        int selected = random.nextInt(Math.max(1, count));
+        for (int face = 0; face < 6; face++) {
+            if ((mask & (1 << face)) != 0 && selected-- == 0) return face;
+        }
+        return 0;
+    }
+
+    public static void applyCameraShake(class_4587 poseStack, float partialTick) {
+        appliedCameraShake = cameraShake(partialTick);
+        if (appliedCameraShake != 0.0F) {
+            poseStack.method_22904(0.0D, appliedCameraShake, 0.0D);
+        }
+    }
+
+    public static void removeCameraShake(class_4587 poseStack) {
+        if (appliedCameraShake != 0.0F) {
+            poseStack.method_22904(0.0D, -appliedCameraShake, 0.0D);
+            appliedCameraShake = 0.0F;
+        }
+    }
+
+    private static float cameraShake(float partialTick) {
+        if (!effectActive) return 0.0F;
+        float t = elapsedTicks + partialTick;
+        if (t < SHATTER_TICK || t >= FINISH_TICK) return 0.0F;
+        float progress = (t - SHATTER_TICK) / (float) (FINISH_TICK - SHATTER_TICK);
+        float envelope = (1.0F - progress) * (1.0F - progress);
+        return (float) Math.sin((t - SHATTER_TICK) * 1.57F) * 0.075F * envelope;
+    }
+
+    private static boolean isFaceTowardCamera(BlockRecord record, Shard shard, View view) {
+        double toCameraX = view.x - (record.x + 0.5D);
+        double toCameraY = view.y - (record.y + 0.5D);
+        double toCameraZ = view.z - (record.z + 0.5D);
+        double dot = toCameraX * shard.normalX + toCameraY * shard.normalY
+                + toCameraZ * shard.normalZ;
+        return dot > -0.10D;
+    }
+
+    private static boolean isInView(BlockRecord record, View view) {
+        double dx = record.x + 0.5D - view.x;
+        double dy = record.y + 0.5D - view.y;
+        double dz = record.z + 0.5D - view.z;
+        double lengthSquared = dx * dx + dy * dy + dz * dz;
+        if (lengthSquared < 1.0E-5D) return true;
+        double inverseLength = 1.0D / Math.sqrt(lengthSquared);
+        double dot = (dx * view.lookX + dy * view.lookY + dz * view.lookZ) * inverseLength;
+        // A wide forward cone avoids rendering most of the hidden hemisphere while
+        // leaving enough margin for peripheral cracks and third-person cameras.
+        return dot > -0.05D;
+    }
+
+    private static final class View {
+        final double x, y, z;
+        final double lookX, lookY, lookZ;
+
+        View(class_4184 camera) {
+            class_243 position = camera.method_19326();
+            x = position.field_1352;
+            y = position.field_1351;
+            z = position.field_1350;
+            double yaw = Math.toRadians(camera.method_19330());
+            double pitch = Math.toRadians(camera.method_19329());
+            double horizontal = Math.cos(pitch);
+            lookX = -Math.sin(yaw) * horizontal;
+            lookY = -Math.sin(pitch);
+            lookZ = Math.cos(yaw) * horizontal;
+        }
+    }
+
+    private static final class FloatBuilder {
+        private float[] values;
+        private int size;
+
+        FloatBuilder(int initialCapacity) {
+            values = new float[initialCapacity];
+        }
+
+        void add(float value) {
+            if (size == values.length) {
+                float[] grown = new float[values.length * 2];
+                System.arraycopy(values, 0, grown, 0, size);
+                values = grown;
+            }
+            values[size++] = value;
+        }
+
+        float[] toArray() {
+            float[] result = new float[size];
+            System.arraycopy(values, 0, result, 0, size);
+            return result;
+        }
+    }
+
+    private static final class BlockSnapshot {
+        final int x, y, z;
+        final class_2680 state;
+        final int faceMask;
+
+        BlockSnapshot(int x, int y, int z, class_2680 state, int faceMask) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.state = state;
+            this.faceMask = faceMask;
+        }
+    }
+
+    private static final class BlockRecord {
+        final int x, y, z;
+        final class_2680 state;
+        final int packedLight;
+        final int faceMask;
+        final double distance;
+        final float crackStartTick;
+        final float[] crackSegments;
+        final Shard[] shards;
+
+        BlockRecord(class_638 level, BlockSnapshot snapshot, int centerX, int centerZ) {
+            x = snapshot.x;
+            y = snapshot.y;
+            z = snapshot.z;
+            state = snapshot.state;
+            faceMask = snapshot.faceMask;
+            packedLight = class_761.method_23794(level, new class_2338(x, y, z));
+            double dx = x + 0.5 - centerX;
+            double dz = z + 0.5 - centerZ;
+            distance = Math.sqrt(dx * dx + dz * dz);
+            crackStartTick = (float) (distance / RADIUS) * CRACKS_REACH_TICK;
+            long seed = (((long) x) * 341873128712L) ^ (((long) z) * 132897987541L) ^ (((long) y) * 42317861L);
+            Random random = new Random(seed);
+            crackSegments = makeCrackSegments(x, y, z, faceMask, random);
+            shards = makeShards(x, y, z, faceMask, random, centerX, centerZ);
+        }
+    }
+
+    private static final class Shard {
+        final float[] vertices;
+        final int vertexCount;
+        final float velocityX, velocityY, velocityZ;
+        final float darkness;
+        final float normalX, normalY, normalZ;
+
+        Shard(float[] vertices, int vertexCount, float velocityX, float velocityY,
+              float velocityZ, float darkness, float normalX, float normalY, float normalZ) {
+            this.vertices = vertices;
+            this.vertexCount = vertexCount;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
+            this.velocityZ = velocityZ;
+            this.darkness = darkness;
+            this.normalX = normalX;
+            this.normalY = normalY;
+            this.normalZ = normalZ;
+        }
+    }
+
+}

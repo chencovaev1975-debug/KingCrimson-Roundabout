@@ -283,7 +283,7 @@ if "roundabout$renderTimeEraseSlash" not in hud_source:
     hud_inject = """
     @Inject(method = "render", at = @At("TAIL"), require = 1)
     private void roundabout$renderTimeEraseSlash(GuiGraphics graphics, float partialTick, CallbackInfo ci) {
-        if (this.minecraft.player != null && !this.minecraft.options.hideGui) {
+        if (this.minecraft.player != null) {
             TimeEraseSlashRenderer.render(graphics, partialTick, this.screenWidth, this.screenHeight);
         }
     }

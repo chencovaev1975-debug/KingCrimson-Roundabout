@@ -125,7 +125,7 @@ if "import net.hydra.jojomod.client.TimeEraseFractureEffect;" not in renderer.re
 replace_once(
     renderer,
     "        buffer.endBatch();",
-    "        TimeEraseFractureEffect.render($$0, buffer, $$3, $$2);\\n\\n        buffer.endBatch();",
+    "        TimeEraseFractureEffect.render($0, buffer, $3, $2);\n\n        buffer.endBatch();",
     "render local Time Erase block fractures and stone chips"
 )
 

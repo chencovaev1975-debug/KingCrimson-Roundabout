@@ -84,8 +84,6 @@ public final class TimeEraseFractureEffect {
     private static double centerX;
     private static double centerY;
     private static double centerZ;
-    private static double forwardX;
-    private static double forwardZ;
     private static float appliedCameraShake;
     private static SimpleSoundInstance themeInstance;
 
@@ -155,11 +153,6 @@ public final class TimeEraseFractureEffect {
         centerX = player.getX();
         centerY = player.getY();
         centerZ = player.getZ();
-
-        float yaw = player.getYRot();
-        double yawRadians = Math.toRadians(yaw);
-        forwardX = -Math.sin(yawRadians);
-        forwardZ = Math.cos(yawRadians);
 
         elapsedTicks = 0;
         effectActive = true;
@@ -440,14 +433,11 @@ public final class TimeEraseFractureEffect {
         double dz = candidate.z + 0.5D - centerZ;
         double distanceSquared = dx * dx + dz * dz;
 
-        // Spread fragments throughout the nearby area instead of placing them
-        // in one narrow strip. Keep a broad 156-degree arc in front and to both
-        // sides of the player so the burst is visible immediately.
-        if (distanceSquared < 30.25D || distanceSquared > 841.0D) return false;
-
-        double distance = Math.sqrt(distanceSquared);
-        double facingDot = (dx * forwardX + dz * forwardZ) / distance;
-        return facingDot >= 0.20D;
+        // No dependency on camera yaw or look direction: distribute fragments
+        // throughout the full 360-degree area around the player's position.
+        // Rocks behind the player remain in the world and appear when the
+        // player turns toward them.
+        return distanceSquared >= 30.25D && distanceSquared <= 841.0D;
     }
 
     private static void addRock(BlockRecord anchor, Random random,

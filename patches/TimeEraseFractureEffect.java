@@ -36,8 +36,8 @@ import java.util.Random;
  *
  * The visible block shell (terrain, trees, leaves and other block models) is
  * captured in a bounded 30-block radius. It is never changed on the server.
- * At the shatter moment the captured scene is hidden and angular stone meshes
- * burst outward. Each mesh lives for one second and then vanishes.
+ * At the shatter moment the captured scene is hidden and irregular 3D stone chunks
+ * erupt from ground anchors in a tight forward-facing cluster and fade out slowly.
  */
 public final class TimeEraseFractureEffect {
     private static final int RADIUS = 30;
@@ -51,7 +51,8 @@ public final class TimeEraseFractureEffect {
     private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
-    private static final int ROCK_LIFETIME_TICKS = 20;
+    private static final int ROCK_LIFETIME_TICKS = 140;
+    private static final int ROCK_FADE_TICKS = 28;
     private static final int BIG_ROCK_COUNT = 20;
     private static final int MEDIUM_ROCK_COUNT = 10;
     private static final int SMALL_ROCK_COUNT = 8;
@@ -375,37 +376,36 @@ public final class TimeEraseFractureEffect {
                 BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT
         );
 
+        // The large fragments are deliberately much larger than the previous
+        // "big" meshes: roughly 7-9 blocks tall, with a broad broken-rock silhouette.
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 4.2D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 2.8D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    2.75F + random.nextFloat() * 0.85F,
-                    0.028F + random.nextFloat() * 0.024F,
-                    0.30F + random.nextFloat() * 0.12F,
-                    false);
+                    4.2F + random.nextFloat() * 1.4F,
+                    0.010F + random.nextFloat() * 0.018F,
+                    0.075F + random.nextFloat() * 0.025F);
         }
 
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.55D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.05D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    1.20F + random.nextFloat() * 0.30F,
-                    0.035F + random.nextFloat() * 0.020F,
-                    0.28F + random.nextFloat() * 0.12F,
-                    true);
+                    1.9F + random.nextFloat() * 0.6F,
+                    0.015F + random.nextFloat() * 0.020F,
+                    0.085F + random.nextFloat() * 0.025F);
         }
 
         for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.95D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.55D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    0.65F + random.nextFloat() * 0.20F,
-                    0.040F + random.nextFloat() * 0.020F,
-                    0.26F + random.nextFloat() * 0.12F,
-                    true);
+                    1.0F + random.nextFloat() * 0.4F,
+                    0.020F + random.nextFloat() * 0.025F,
+                    0.095F + random.nextFloat() * 0.030F);
         }
     }
 
@@ -439,35 +439,36 @@ public final class TimeEraseFractureEffect {
     private static boolean isSafeVisibleAnchor(BlockRecord candidate) {
         double dx = candidate.x + 0.5D - centerX;
         double dz = candidate.z + 0.5D - centerZ;
-        double distanceSquared = dx * dx + dz * dz;
-        if (distanceSquared < 1.0D) return false;
 
+        // Keep every rock in one compact patch in front of the player's facing
+        // direction. Nothing is selected behind the player or off to the sides.
         double forwardDistance = dx * forwardX + dz * forwardZ;
-        double distance = Math.sqrt(distanceSquared);
-        if (forwardDistance < -0.55D * distance) return false;
+        if (forwardDistance < 5.0D || forwardDistance > 20.0D) return false;
 
-        // No fragment may appear in the first four blocks directly ahead.
-        return !(forwardDistance > 0.0D && distanceSquared < 16.0D);
+        double sideDistance = Math.abs(dx * forwardZ - dz * forwardX);
+        double allowedSideDistance = Math.min(4.2D, 1.8D + forwardDistance * 0.12D);
+        return sideDistance <= allowedSideDistance;
     }
 
     private static void addRock(BlockRecord anchor, Random random,
-                                float scale, float horizontalSpeed, float verticalSpeed,
-                                boolean beveledShape) {
+                                float scale, float horizontalSpeed, float verticalSpeed) {
         double dx = anchor.x + 0.5D - centerX;
         double dz = anchor.z + 0.5D - centerZ;
         double length = Math.sqrt(dx * dx + dz * dz);
         float directionX = length > 0.001D ? (float) (dx / length) : 0.0F;
         float directionZ = length > 0.001D ? (float) (dz / length) : 0.0F;
 
+        // A restrained outward drift keeps the boulders together instead of
+        // scattering them across the whole 30-block capture radius.
         float velocityX = directionX * horizontalSpeed
-                + (random.nextFloat() - 0.5F) * 0.09F;
+                + (random.nextFloat() - 0.5F) * 0.012F;
         float velocityZ = directionZ * horizontalSpeed
-                + (random.nextFloat() - 0.5F) * 0.09F;
+                + (random.nextFloat() - 0.5F) * 0.012F;
         float velocityY = verticalSpeed;
-        RockMesh mesh = createRockMesh(random, beveledShape);
+        RockMesh mesh = createRockMesh(random);
 
-        // Calculate the exact lowest mesh point so every fragment starts with
-        // its bottom touching the terrain, regardless of its random shape.
+        // Place the lowest vertex exactly on the surface, then lift the whole
+        // irregular 3D mesh vertically so it visibly erupts out of the ground.
         float lowestVertexY = 0.0F;
         for (float[] vertex : mesh.vertices) {
             lowestVertexY = Math.min(lowestVertexY, vertex[1]);
@@ -482,88 +483,93 @@ public final class TimeEraseFractureEffect {
                 velocityY,
                 velocityZ,
                 scale,
-                random.nextInt(4),
+                random.nextInt(7),
                 random.nextFloat() * 360.0F,
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.50F + random.nextFloat() * 0.70F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.35F + random.nextFloat() * 0.55F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.30F + random.nextFloat() * 0.45F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.30F + random.nextFloat() * 0.45F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.10F + random.nextFloat() * 0.18F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.07F + random.nextFloat() * 0.13F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.06F + random.nextFloat() * 0.12F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.06F + random.nextFloat() * 0.12F),
                 mesh
         ));
     }
 
     /**
-     * Large rocks use an uneven diamond/rhombus polyhedron. The medium and
-     * small pieces use a chipped, bevelled block silhouette: squarer, but with
-     * slanted faces and irregular corners rather than a plain cube.
+     * A low-poly broken boulder, not a cube or a pointed diamond: three uneven
+     * rings with independently varied radii, heights and angular offsets.
+     * Triangulated faces give it genuine volume and a jagged natural silhouette.
      */
-    private static RockMesh createRockMesh(Random random, boolean beveledShape) {
-        if (beveledShape) {
-            float[][] vertices = new float[8][3];
-            for (int i = 0; i < 4; i++) {
-                float angle = (float) (Math.PI / 4.0D) + i * ((float) Math.PI / 2.0F);
-                float topRadiusX = 0.43F + random.nextFloat() * 0.12F;
-                float topRadiusZ = 0.42F + random.nextFloat() * 0.13F;
-                float bottomRadiusX = 0.49F + random.nextFloat() * 0.10F;
-                float bottomRadiusZ = 0.47F + random.nextFloat() * 0.12F;
-                vertices[i] = new float[] {
-                        (float) Math.cos(angle) * topRadiusX,
-                        0.42F + (random.nextFloat() - 0.5F) * 0.12F,
-                        (float) Math.sin(angle) * topRadiusZ
-                };
-                vertices[i + 4] = new float[] {
-                        (float) Math.cos(angle + 0.10F) * bottomRadiusX,
-                        -0.42F - random.nextFloat() * 0.12F,
-                        (float) Math.sin(angle + 0.10F) * bottomRadiusZ
-                };
-            }
-
-            int[][] faces = new int[12][3];
-            faces[0] = new int[] {0, 1, 2};
-            faces[1] = new int[] {0, 2, 3};
-            faces[2] = new int[] {4, 6, 5};
-            faces[3] = new int[] {4, 7, 6};
-            int face = 4;
-            for (int i = 0; i < 4; i++) {
-                int next = (i + 1) % 4;
-                faces[face++] = new int[] {i, i + 4, next + 4};
-                faces[face++] = new int[] {i, next + 4, next};
-            }
-            return new RockMesh(vertices, faces);
-        }
-
-        float[][] vertices = new float[8][3];
-        vertices[0] = new float[] {
-                (random.nextFloat() - 0.5F) * 0.22F,
-                0.76F + random.nextFloat() * 0.18F,
-                (random.nextFloat() - 0.5F) * 0.22F
-        };
-
+    private static RockMesh createRockMesh(Random random) {
+        final int segments = 8;
+        final int upperRing = 0;
+        final int middleRing = segments;
+        final int lowerRing = segments * 2;
+        final int topTip = segments * 3;
+        final int bottomTip = topTip + 1;
+        float[][] vertices = new float[segments * 3 + 2][3];
         float angleOffset = random.nextFloat() * (float) (Math.PI * 2.0D);
-        for (int i = 0; i < 6; i++) {
-            float angle = angleOffset + i * ((float) Math.PI / 3.0F);
-            float radiusX = 0.53F + random.nextFloat() * 0.23F;
-            float radiusZ = 0.48F + random.nextFloat() * 0.26F;
-            float y = (random.nextFloat() - 0.5F) * 0.52F;
-            vertices[i + 1] = new float[] {
-                    (float) Math.cos(angle) * radiusX,
-                    y,
-                    (float) Math.sin(angle) * radiusZ
+
+        for (int i = 0; i < segments; i++) {
+            float baseAngle = angleOffset + i * ((float) (Math.PI * 2.0D) / segments);
+            float upperAngle = baseAngle + (random.nextFloat() - 0.5F) * 0.16F;
+            float middleAngle = baseAngle + 0.10F + (random.nextFloat() - 0.5F) * 0.20F;
+            float lowerAngle = baseAngle + 0.19F + (random.nextFloat() - 0.5F) * 0.22F;
+
+            float upperRadiusX = 0.48F + random.nextFloat() * 0.30F;
+            float upperRadiusZ = 0.46F + random.nextFloat() * 0.31F;
+            vertices[upperRing + i] = new float[] {
+                    (float) Math.cos(upperAngle) * upperRadiusX,
+                    0.34F + (random.nextFloat() - 0.5F) * 0.20F,
+                    (float) Math.sin(upperAngle) * upperRadiusZ
+            };
+
+            float middleRadiusX = 0.66F + random.nextFloat() * 0.31F;
+            float middleRadiusZ = 0.62F + random.nextFloat() * 0.34F;
+            vertices[middleRing + i] = new float[] {
+                    (float) Math.cos(middleAngle) * middleRadiusX,
+                    -0.02F + (random.nextFloat() - 0.5F) * 0.22F,
+                    (float) Math.sin(middleAngle) * middleRadiusZ
+            };
+
+            float lowerRadiusX = 0.43F + random.nextFloat() * 0.34F;
+            float lowerRadiusZ = 0.42F + random.nextFloat() * 0.34F;
+            vertices[lowerRing + i] = new float[] {
+                    (float) Math.cos(lowerAngle) * lowerRadiusX,
+                    -0.39F + (random.nextFloat() - 0.5F) * 0.20F,
+                    (float) Math.sin(lowerAngle) * lowerRadiusZ
             };
         }
 
-        vertices[7] = new float[] {
-                (random.nextFloat() - 0.5F) * 0.26F,
+        vertices[topTip] = new float[] {
+                (random.nextFloat() - 0.5F) * 0.30F,
+                0.72F + random.nextFloat() * 0.16F,
+                (random.nextFloat() - 0.5F) * 0.30F
+        };
+        vertices[bottomTip] = new float[] {
+                (random.nextFloat() - 0.5F) * 0.34F,
                 -0.68F - random.nextFloat() * 0.16F,
-                (random.nextFloat() - 0.5F) * 0.26F
+                (random.nextFloat() - 0.5F) * 0.34F
         };
 
-        int[][] faces = new int[12][3];
-        for (int i = 0; i < 6; i++) {
-            int current = i + 1;
-            int next = ((i + 1) % 6) + 1;
-            faces[i] = new int[] {0, current, next};
-            faces[i + 6] = new int[] {7, next, current};
+        // 8 top facets + 16 upper sides + 16 lower sides + 8 bottom facets.
+        int[][] faces = new int[segments * 6][3];
+        int face = 0;
+        for (int i = 0; i < segments; i++) {
+            int next = (i + 1) % segments;
+            faces[face++] = new int[] {topTip, upperRing + i, upperRing + next};
+
+            if (random.nextBoolean()) {
+                faces[face++] = new int[] {upperRing + i, middleRing + i, middleRing + next};
+                faces[face++] = new int[] {upperRing + i, middleRing + next, upperRing + next};
+                faces[face++] = new int[] {middleRing + i, lowerRing + i, lowerRing + next};
+                faces[face++] = new int[] {middleRing + i, lowerRing + next, middleRing + next};
+            } else {
+                faces[face++] = new int[] {upperRing + i, middleRing + i, upperRing + next};
+                faces[face++] = new int[] {upperRing + next, middleRing + i, middleRing + next};
+                faces[face++] = new int[] {middleRing + i, lowerRing + i, middleRing + next};
+                faces[face++] = new int[] {middleRing + next, lowerRing + i, lowerRing + next};
+            }
+
+            faces[face++] = new int[] {bottomTip, lowerRing + next, lowerRing + i};
         }
         return new RockMesh(vertices, faces);
     }
@@ -582,7 +588,9 @@ public final class TimeEraseFractureEffect {
             float age = elapsedTicks + partialTick - SHATTER_TICK - rock.spawnDelay;
             if (age < 0.0F || age >= ROCK_LIFETIME_TICKS) continue;
 
-            float alpha = age <= 15.0F ? 1.0F : (ROCK_LIFETIME_TICKS - age) / 5.0F;
+            float fadeStart = ROCK_LIFETIME_TICKS - ROCK_FADE_TICKS;
+            float alpha = age <= fadeStart ? 1.0F
+                    : (ROCK_LIFETIME_TICKS - age) / (float) ROCK_FADE_TICKS;
             int alphaByte = (int) (Math.max(0.0F, Math.min(1.0F, alpha)) * 255.0F);
 
             double x = rock.x + rock.velocityX * age;

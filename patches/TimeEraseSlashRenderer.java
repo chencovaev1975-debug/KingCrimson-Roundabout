@@ -13,10 +13,10 @@ import org.joml.Matrix4f;
 
 /** A broad, soft pink screen cut that travels vertically from bottom to top. */
 public final class TimeEraseSlashRenderer {
-    private static final float BAND_HEIGHT = 680.0F;
+    private static final float BAND_HEIGHT = 1360.0F;
     private static final float ARCH_HEIGHT = 22.0F;
     private static final int HORIZONTAL_SEGMENTS = 72;
-    private static final int VERTICAL_SEGMENTS = 32;
+    private static final int VERTICAL_SEGMENTS = 48;
 
     private TimeEraseSlashRenderer() {}
 
@@ -44,9 +44,9 @@ public final class TimeEraseSlashRenderer {
 
             // Massive screen-filling soft edge halo, mid feather and a pink centre. There is no white core.
             drawBandLayer(matrix, screenWidth, screenHeight, progress, fade,
-                    900.0F, 0.04F, 1.0F, 0.078F, 0.576F);
+                    1800.0F, 0.04F, 1.0F, 0.078F, 0.576F);
             drawBandLayer(matrix, screenWidth, screenHeight, progress, fade,
-                    780.0F, 0.08F, 1.0F, 0.20F, 0.60F);
+                    1560.0F, 0.08F, 1.0F, 0.20F, 0.60F);
             drawBandLayer(matrix, screenWidth, screenHeight, progress, fade,
                     BAND_HEIGHT, 0.30F, 1.0F, 0.078F, 0.576F);
         } finally {

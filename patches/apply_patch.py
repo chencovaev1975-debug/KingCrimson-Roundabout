@@ -56,14 +56,27 @@ replace_once(
 )
 
 # Restore the native End sky on the same frame the Time Erase ability is released.
-replace_once(
-    renderer,
-    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
-        if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {""",
-    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
-        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {""",
-    "restore End sky immediately after Time Erase ends"
+# Locate the injection by method name so this remains robust to local-variable names.
+end_sky_source = renderer.read_text(encoding="utf-8")
+end_sky_start = end_sky_source.find("private void roundabout$renderEndSky")
+if end_sky_start < 0:
+    raise SystemExit("End sky restoration: renderEndSky injection not found")
+next_inject = end_sky_source.find("@Inject", end_sky_start + 1)
+end_sky_condition = end_sky_source.find(
+    "if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {",
+    end_sky_start
 )
+if end_sky_condition < 0 or (next_inject >= 0 and end_sky_condition > next_inject):
+    raise SystemExit("End sky restoration: expected condition not found in renderEndSky")
+end_sky_source = (
+    end_sky_source[:end_sky_condition]
+    + end_sky_source[end_sky_condition:].replace(
+        "if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {",
+        "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
+        1
+    )
+)
+renderer.write_text(end_sky_source, encoding="utf-8")
 
 # Muted charcoal tint for the six Time Erase skybox faces.
 sky_source = renderer.read_text(encoding="utf-8")

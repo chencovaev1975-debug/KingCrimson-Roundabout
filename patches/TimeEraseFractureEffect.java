@@ -19,6 +19,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -42,10 +43,10 @@ public final class TimeEraseFractureEffect {
     private static final int RADIUS = 20;
     private static final int BAND_COUNT = 4;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
-    private static final int MAX_BLOCKS = 1800;
-    private static final int[] BAND_CAPS = {140, 340, 550, 770};
-    private static final int OBJECT_SCAN_ABOVE = 32;
-    private static final int OBJECT_SCAN_BELOW = 24;
+    private static final int MAX_BLOCKS = 6000;
+    private static final int[] OBJECT_CAPS = {500, 850, 1250, 1650};
+    private static final int OBJECT_SCAN_ABOVE = 40;
+    private static final int OBJECT_SCAN_BELOW = 12;
 
     private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;
@@ -62,7 +63,7 @@ public final class TimeEraseFractureEffect {
     };
 
     private static final float[][] TRIANGLE_UV = {
-            {0.08F, 0.08F}, {0.92F, 0.08F}, {0.50F, 0.92F}
+            {1.0F, 1.0F}, {15.0F, 1.0F}, {8.0F, 15.0F}
     };
     private static final RenderType ROCK_RENDER_TYPE =
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
@@ -201,16 +202,13 @@ public final class TimeEraseFractureEffect {
         int innerRadius = bandIndex * BAND_RADIUS;
         int outerSquared = outerRadius * outerRadius;
         int innerSquared = innerRadius * innerRadius;
-        int capacity = BAND_CAPS[bandIndex];
-        Random random = new Random((((long) cx) << 32) ^ (((long) cz) << 1)
-                ^ cy ^ (0x4B435246L + bandIndex * 0x9E3779B9L));
+        int objectCapacity = OBJECT_CAPS[bandIndex];
 
-        // Keep the ground surface for every column first. Remaining capacity
-        // is reserved for extra exposed models such as trunks, leaves, plants,
-        // cliff sides and nearby structures.
-        List<BlockSnapshot> surfaceSnapshots = new ArrayList<>(capacity);
-        List<BlockSnapshot> objectReservoir = new ArrayList<>(capacity);
-        int seenObjects = 0;
+        // Ground columns are stored separately. Surface blocks can no longer
+        // consume the quota reserved for trees and other visible objects.
+        List<BlockSnapshot> surfaceSnapshots = new ArrayList<>();
+        List<BlockSnapshot> treeSnapshots = new ArrayList<>(objectCapacity);
+        List<BlockSnapshot> objectSnapshots = new ArrayList<>(objectCapacity);
         BlockPos.MutableBlockPos scanPos = new BlockPos.MutableBlockPos();
 
         for (int x = cx - outerRadius; x <= cx + outerRadius; x++) {
@@ -243,34 +241,44 @@ public final class TimeEraseFractureEffect {
                     BlockState state = level.getBlockState(scanPos);
                     if (state.isAir()
                             || !state.getFluidState().isEmpty()
-                            || state.getRenderShape() == RenderShape.INVISIBLE
-                            || !hasExposedFace(level, x, y, z)) {
+                            || state.getRenderShape() == RenderShape.INVISIBLE) {
                         continue;
                     }
 
-                    seenObjects++;
-                    BlockSnapshot snapshot = new BlockSnapshot(x, y, z, state);
-                    if (objectReservoir.size() < capacity) {
-                        objectReservoir.add(snapshot);
-                    } else {
-                        int replace = random.nextInt(seenObjects);
-                        if (replace < capacity) objectReservoir.set(replace, snapshot);
+                    // Keep complete tree structures, including leaves enclosed
+                    // by other leaves. Other blocks must have an exposed face.
+                    boolean treePart = state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES);
+                    if (treePart) {
+                        if (treeSnapshots.size() < objectCapacity) {
+                            treeSnapshots.add(new BlockSnapshot(x, y, z, state));
+                        }
+                    } else if (hasExposedFace(level, x, y, z)
+                            && objectSnapshots.size() < objectCapacity) {
+                        objectSnapshots.add(new BlockSnapshot(x, y, z, state));
                     }
                 }
             }
         }
 
-        int added = 0;
         for (BlockSnapshot snapshot : surfaceSnapshots) {
-            if (BLOCKS.size() >= MAX_BLOCKS || added >= capacity) break;
+            if (BLOCKS.size() >= MAX_BLOCKS) return;
+            BLOCKS.add(new BlockRecord(level, snapshot));
+        }
+
+        // Trees are prioritized over incidental exposed blocks. We no longer
+        // use random reservoir sampling, which previously removed many leaves
+        // and log segments from the same tree.
+        int remaining = Math.min(objectCapacity, MAX_BLOCKS - BLOCKS.size());
+        int added = 0;
+        for (BlockSnapshot snapshot : treeSnapshots) {
+            if (added >= remaining) break;
             BLOCKS.add(new BlockRecord(level, snapshot));
             added++;
         }
-
-        int extraCapacity = Math.max(0, capacity - added);
-        for (int i = 0; i < objectReservoir.size() && i < extraCapacity; i++) {
-            if (BLOCKS.size() >= MAX_BLOCKS) break;
-            BLOCKS.add(new BlockRecord(level, objectReservoir.get(i)));
+        for (BlockSnapshot snapshot : objectSnapshots) {
+            if (added >= remaining) break;
+            BLOCKS.add(new BlockRecord(level, snapshot));
+            added++;
         }
     }
 
@@ -282,6 +290,8 @@ public final class TimeEraseFractureEffect {
             if (state.isAir()
                     || !state.getFluidState().isEmpty()
                     || state.getRenderShape() == RenderShape.INVISIBLE
+                    || state.is(BlockTags.LEAVES)
+                    || state.is(BlockTags.LOGS)
                     || !state.isSolidRender(level, pos)) {
                 continue;
             }
@@ -364,8 +374,8 @@ public final class TimeEraseFractureEffect {
             usedAnchors.add(anchor);
             addRock(anchor, random,
                     1.45F + random.nextFloat() * 0.80F,
-                    0.14F + random.nextFloat() * 0.10F,
-                    0.23F + random.nextFloat() * 0.13F,
+                    0.055F + random.nextFloat() * 0.045F,
+                    0.090F + random.nextFloat() * 0.045F,
                     false);
         }
 
@@ -375,8 +385,8 @@ public final class TimeEraseFractureEffect {
             usedAnchors.add(anchor);
             addRock(anchor, random,
                     0.90F + random.nextFloat() * 0.15F,
-                    0.15F + random.nextFloat() * 0.09F,
-                    0.27F + random.nextFloat() * 0.12F,
+                    0.060F + random.nextFloat() * 0.040F,
+                    0.095F + random.nextFloat() * 0.045F,
                     true);
         }
 
@@ -386,39 +396,51 @@ public final class TimeEraseFractureEffect {
             usedAnchors.add(anchor);
             addRock(anchor, random,
                     0.45F + random.nextFloat() * 0.10F,
-                    0.17F + random.nextFloat() * 0.09F,
-                    0.30F + random.nextFloat() * 0.12F,
+                    0.070F + random.nextFloat() * 0.050F,
+                    0.105F + random.nextFloat() * 0.045F,
                     true);
         }
     }
 
     private static BlockRecord pickAnchor(Random random, List<BlockRecord> used, double minSpacing) {
-        double minSpacingSquared = minSpacing * minSpacing;
-        for (int attempt = 0; attempt < 900; attempt++) {
-            BlockRecord candidate = BLOCKS.get(random.nextInt(BLOCKS.size()));
-            if (used.contains(candidate)) continue;
+        // Try full spacing first, then relax it gradually to guarantee the
+        // requested number of fragments on uneven or sparse terrain.
+        double[] spacingFactors = {1.0D, 0.72D, 0.42D, 0.0D};
+        for (double spacingFactor : spacingFactors) {
+            double minSpacingSquared = minSpacing * minSpacing
+                    * spacingFactor * spacingFactor;
 
-            double dx = candidate.x + 0.5D - centerX;
-            double dz = candidate.z + 0.5D - centerZ;
-            double distanceSquared = dx * dx + dz * dz;
-            double forwardDistance = dx * forwardX + dz * forwardZ;
+            for (int attempt = 0; attempt < Math.max(900, BLOCKS.size() * 2); attempt++) {
+                BlockRecord candidate = BLOCKS.get(random.nextInt(BLOCKS.size()));
+                if (used.contains(candidate) || !isSafeVisibleAnchor(candidate)) continue;
 
-            // No large or small fragment may spawn within four horizontal
-            // blocks in front of the player's initial view direction.
-            if (forwardDistance > 0.0D && distanceSquared < 16.0D) continue;
-
-            boolean spaced = true;
-            for (BlockRecord chosen : used) {
-                double sx = candidate.x - chosen.x;
-                double sz = candidate.z - chosen.z;
-                if (sx * sx + sz * sz < minSpacingSquared) {
-                    spaced = false;
-                    break;
+                boolean spaced = true;
+                for (BlockRecord chosen : used) {
+                    double sx = candidate.x - chosen.x;
+                    double sz = candidate.z - chosen.z;
+                    if (sx * sx + sz * sz < minSpacingSquared) {
+                        spaced = false;
+                        break;
+                    }
                 }
+                if (spaced) return candidate;
             }
-            if (spaced) return candidate;
         }
         return null;
+    }
+
+    private static boolean isSafeVisibleAnchor(BlockRecord candidate) {
+        double dx = candidate.x + 0.5D - centerX;
+        double dz = candidate.z + 0.5D - centerZ;
+        double distanceSquared = dx * dx + dz * dz;
+        if (distanceSquared < 1.0D) return false;
+
+        double forwardDistance = dx * forwardX + dz * forwardZ;
+        double distance = Math.sqrt(distanceSquared);
+        if (forwardDistance < -0.55D * distance) return false;
+
+        // No fragment may appear in the first four blocks directly ahead.
+        return !(forwardDistance > 0.0D && distanceSquared < 16.0D);
     }
 
     private static void addRock(BlockRecord anchor, Random random,
@@ -446,10 +468,10 @@ public final class TimeEraseFractureEffect {
                 scale,
                 random.nextInt(4),
                 random.nextFloat() * 360.0F,
-                (random.nextBoolean() ? 1.0F : -1.0F) * (1.0F + random.nextFloat() * 2.0F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.8F + random.nextFloat() * 1.8F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.7F + random.nextFloat() * 1.5F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.6F + random.nextFloat() * 1.4F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.50F + random.nextFloat() * 0.70F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.35F + random.nextFloat() * 0.55F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.30F + random.nextFloat() * 0.45F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.30F + random.nextFloat() * 0.45F),
                 createRockMesh(random, beveledShape)
         ));
     }
@@ -650,7 +672,7 @@ public final class TimeEraseFractureEffect {
         if (lengthSquared < 1.0E-5D) return true;
         double inverseLength = 1.0D / Math.sqrt(lengthSquared);
         double dot = (dx * view.lookX + dy * view.lookY + dz * view.lookZ) * inverseLength;
-        return dot > -0.18D;
+        return dot > -0.65D;
     }
 
     private static final class View {

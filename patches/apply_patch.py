@@ -55,6 +55,21 @@ replace_once(
     "hide clouds during the Time Erase skybox fade"
 )
 
+# Muted charcoal tint for the six Time Erase skybox faces.
+sky_source = renderer.read_text(encoding="utf-8")
+sky_start = sky_source.find('@Inject(method = "renderSky"')
+sky_end = sky_source.find("if (ClientUtil.isUnderRTZ())", sky_start)
+if sky_start < 0 or sky_end < 0:
+    raise SystemExit("Time Erase skybox tint: could not locate renderSky section")
+sky_section = sky_source[sky_start:sky_end]
+tint_anchor = "color(1F, 1F, 1F, alpha)"
+tint_count = sky_section.count(tint_anchor)
+if tint_count != 4:
+    raise SystemExit(f"Time Erase skybox tint: expected four vertex colors, found {tint_count}")
+sky_section = sky_section.replace(tint_anchor, "color(0.30F, 0.31F, 0.33F, alpha)")
+renderer.write_text(sky_source[:sky_start] + sky_section + sky_source[sky_end:], encoding="utf-8")
+
+
 
 # Add the local-only fracture effect. The class is deliberately client-only and only
 # snapshots block states: it never edits blocks, entities, collision, or server state.

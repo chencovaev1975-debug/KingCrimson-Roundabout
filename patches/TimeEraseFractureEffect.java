@@ -449,6 +449,7 @@ public final class TimeEraseFractureEffect {
                 (random.nextBoolean() ? 1.0F : -1.0F) * (1.0F + random.nextFloat() * 2.0F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.8F + random.nextFloat() * 1.8F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.7F + random.nextFloat() * 1.5F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.6F + random.nextFloat() * 1.4F),
                 createRockMesh(random, beveledShape)
         ));
     }
@@ -712,7 +713,7 @@ public final class TimeEraseFractureEffect {
         final float velocityX, velocityY, velocityZ;
         final float scale;
         final int spawnDelay;
-        final float yaw, yawSpeed, pitchSpeed, roll, rollSpeed;
+        final float yaw, pitch, yawSpeed, pitchSpeed, roll, rollSpeed;
         final RockMesh mesh;
 
         Rock(float x, float y, float z,
@@ -729,6 +730,7 @@ public final class TimeEraseFractureEffect {
             this.scale = scale;
             this.spawnDelay = spawnDelay;
             this.yaw = yaw;
+            this.pitch = (yaw * 0.17F) % 35.0F;
             this.yawSpeed = yawSpeed;
             this.pitchSpeed = pitchSpeed;
             this.roll = roll;

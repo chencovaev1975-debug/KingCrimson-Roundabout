@@ -80,6 +80,68 @@ if not fracture_source.exists():
     raise SystemExit("Missing addon source: patches/TimeEraseFractureEffect.java")
 fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding="utf-8")
 
+# Install the screen slash and the two player/entity render layers.
+addon_files = {
+    "TimeEraseSlashRenderer.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSlashRenderer.java",
+    "TimeEraseAuraLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseAuraLayer.java",
+    "TimeEraseFutureLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseFutureLayer.java",
+}
+for filename, target in addon_files.items():
+    source = Path(__file__).with_name(filename)
+    if not source.exists():
+        raise SystemExit(f"Missing addon source: patches/{filename}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+# Generate two tiny white/alpha textures locally. The tint and alpha are supplied
+# by the render layers, so no external image dependency or network fetch is needed.
+def write_rgba_png(path, width, height, pixel_fn):
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # PNG filter: None
+        for x in range(width):
+            rows.extend(pixel_fn(x, y))
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+           + chunk(b"IEND", b""))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(png)
+
+texture_root = root / "common/src/main/resources/assets/roundabout/textures/misc"
+write_rgba_png(texture_root / "flat_white.png", 1, 1,
+               lambda x, y: (255, 255, 255, 255))
+
+def aura_pixel(x, y):
+    import math
+    vertical = y / 63.0
+    alpha = 0
+    for index in range(5):
+        base = 5.0 + index * 13.5
+        center = base + math.sin(vertical * 8.5 + index * 1.63) * 3.2
+        width = 2.2 + 1.6 * math.sin(vertical * math.pi)
+        distance = abs(x - center)
+        if distance < width:
+            flame_alpha = int(230 * (1.0 - distance / width) ** 0.7
+                              * (0.30 + 0.70 * vertical))
+            alpha = max(alpha, flame_alpha)
+    # A few fine wisps break up the broad tongues into flowing energy streaks.
+    for index in range(3):
+        center = 16.0 + index * 17.0 + math.sin(vertical * 13.0 + index) * 5.0
+        distance = abs(x - center)
+        if distance < 1.2:
+            alpha = max(alpha, int(125 * (1.0 - distance / 1.2) * vertical))
+    return 255, 255, 255, alpha
+
+write_rgba_png(texture_root / "diavolo_aura.png", 64, 64, aura_pixel)
+
 # Start the effect on the local client's Time Erase rising edge, and let its own
 # incremental client snapshot timer advance independently of server-side world data.
 replace_once(
@@ -178,6 +240,70 @@ def update_source_once(path, old, new, label):
     if count != 1:
         raise SystemExit(f"{label}: expected one anchor, found {count}")
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+# Attach the fullbright future hologram to every living renderer and the aura to
+# the activating player's renderer. The normal model pose is reused, preserving
+# each entity's current walk, jump, and attack animation.
+living_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/ZLivingEntityRenderer.java"
+update_source_once(
+    living_renderer,
+    "import net.hydra.jojomod.client.models.layers.FrozenLayer;",
+    """import net.hydra.jojomod.client.models.layers.FrozenLayer;
+import net.hydra.jojomod.client.models.layers.TimeEraseAuraLayer;
+import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;""",
+    "import the Time Erase player aura and future render layers"
+)
+update_source_once(
+    living_renderer,
+    """        this.addLayer(new FrozenLayer<>($0, ((LivingEntityRenderer)(Object)this)));""",
+    """        this.addLayer(new FrozenLayer<>($0, ((LivingEntityRenderer)(Object)this)));
+        this.addLayer(new TimeEraseAuraLayer<>(this));
+        this.addLayer(new TimeEraseFutureLayer<>(this));""",
+    "attach the aura and future hologram to all living renderers"
+)
+update_source_once(
+    living_renderer,
+    """    private void roundabout$applyInvisibilityFade(T entity, float entityYaw, float partialTicks, PoseStack poseStack, MultiBufferSource buffer, int packedLight, CallbackInfo ci) {
+
+        byte sam = ((StandUser)entity).roundabout$getStandAnimation();""",
+    """    private void roundabout$applyInvisibilityFade(T entity, float entityYaw, float partialTicks, PoseStack poseStack, MultiBufferSource buffer, int packedLight, CallbackInfo ci) {
+
+        // Render the real body a small step along its predicted path, behind the
+        // 1.25-second red future image. This changes only the client model pose;
+        // the real entity position, hitbox, collision and server state are intact.
+        net.minecraft.world.phys.Vec3 visualOffset =
+                TimeEraseFractureEffect.getVisualBodyOffset(entity, partialTicks);
+        if (visualOffset != null) {
+            poseStack.translate(visualOffset.x, visualOffset.y, visualOffset.z);
+        }
+
+        byte sam = ((StandUser)entity).roundabout$getStandAnimation();""",
+    "move the rendered body slightly behind its future hologram"
+)
+
+# Draw the neon slash after the native hotbar GUI. This is the 1.20.1 Gui render
+# hook used by both project loaders; it keeps the effect in true screen-space.
+hud_mixin = root / "common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java"
+update_source_once(
+    hud_mixin,
+    "import net.hydra.jojomod.client.ClientUtil;",
+    """import net.hydra.jojomod.client.ClientUtil;
+import net.hydra.jojomod.client.TimeEraseSlashRenderer;""",
+    "import the screen-space Time Erase slash renderer"
+)
+hud_source = hud_mixin.read_text(encoding="utf-8")
+if "roundabout$renderTimeEraseSlash" not in hud_source:
+    close = hud_source.rfind("}")
+    if close < 0:
+        raise SystemExit("HUD slash injection: class closing brace not found")
+    hud_inject = """
+    @Inject(method = "renderHotbar", at = @At("TAIL"))
+    private void roundabout$renderTimeEraseSlash(float partialTick, GuiGraphics graphics, CallbackInfo ci) {
+        TimeEraseSlashRenderer.render(graphics, partialTick, this.screenWidth, this.screenHeight);
+    }
+
+"""
+    hud_mixin.write_text(hud_source[:close] + hud_inject + hud_source[close:], encoding="utf-8")
 
 powers = root / "common/src/main/java/net/hydra/jojomod/stand/powers/PowersKingCrimson.java"
 update_source_once(

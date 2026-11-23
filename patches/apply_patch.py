@@ -219,17 +219,21 @@ crack_target = root / "common/src/main/resources/assets/roundabout/textures/misc
 crack_target.parent.mkdir(parents=True, exist_ok=True)
 crack_target.write_bytes(crack_bytes)
 
-audio_asset = assets_dir / "diavolo_theme.ogg"
-if audio_asset.is_file():
+audio_candidates = sorted(assets_dir.glob("*.ogg"))
+if len(audio_candidates) == 1:
+    audio_asset = audio_candidates[0]
     audio_bytes = audio_asset.read_bytes()
     if not audio_bytes.startswith(b"OggS"):
         raise SystemExit("Diavolo theme asset is not a valid Ogg container")
     audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
     audio_target.parent.mkdir(parents=True, exist_ok=True)
     audio_target.write_bytes(audio_bytes)
-    print("Installed Diavolo theme audio asset.")
+    print(f"Installed Diavolo theme audio asset from {audio_asset.name}.")
+elif len(audio_candidates) == 0:
+    raise SystemExit("Missing Diavolo theme audio: upload the .ogg file to patches/assets/")
 else:
-    print("NOTE: missing patches/assets/diavolo_theme.ogg; Diavolo theme will be silent until uploaded.")
+    raise SystemExit("Expected exactly one .ogg file in patches/assets/; found: "
+                     + ", ".join(path.name for path in audio_candidates))
 
 print("Installed the widened fracture texture and the optimized 13-boulder Time Erase scene.")
 

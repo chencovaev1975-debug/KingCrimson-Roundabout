@@ -255,6 +255,68 @@ def update_source_once(path, old, new, label):
         raise SystemExit(f"{label}: expected one anchor, found {count}")
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
+# Silence the activating client's world audio during Time Erase while retaining
+# only its activation/end sounds, Diavolo theme, and nearby King Crimson impacts.
+sound_manager_mixin = root / "common/src/main/java/net/hydra/jojomod/mixin/soft_and_wet/SoftAndWetSoundManager.java"
+update_source_once(
+    sound_manager_mixin,
+    "import net.hydra.jojomod.access.ILevelAccess;",
+    """import net.hydra.jojomod.access.ILevelAccess;
+import net.hydra.jojomod.client.TimeEraseFractureEffect;
+import net.minecraft.client.resources.sounds.TickableSoundInstance;
+import net.minecraft.sounds.SoundSource;""",
+    "import the local Time Erase sound filter"
+)
+update_source_once(
+    sound_manager_mixin,
+    """    public void roundabout$play(SoundInstance $0, CallbackInfo ci) {
+        if (Minecraft.getInstance().player != null){""",
+    """    public void roundabout$play(SoundInstance $0, CallbackInfo ci) {
+        SoundInstance routed = TimeEraseFractureEffect.routeTimeEraseSound($0);
+        if (routed == null) {
+            ci.cancel();
+            return;
+        }
+        if (routed != $0) {
+            ci.cancel();
+            Minecraft.getInstance().getSoundManager().play(routed);
+            return;
+        }
+        if (Minecraft.getInstance().player != null){""",
+    "filter and route ordinary world sounds during Time Erase"
+)
+sound_mixin_source = sound_manager_mixin.read_text(encoding="utf-8")
+if "roundabout$filterTimeEraseDelayedSound" not in sound_mixin_source:
+    close = sound_mixin_source.rfind("}")
+    if close < 0:
+        raise SystemExit("Time Erase audio filter: SoundManager mixin closing brace not found")
+    sound_injections = """
+    @Inject(method = "playDelayed", at = @At("HEAD"), cancellable = true)
+    public void roundabout$filterTimeEraseDelayedSound(SoundInstance sound, int delay, CallbackInfo ci) {
+        SoundInstance routed = TimeEraseFractureEffect.routeTimeEraseSound(sound);
+        if (routed == null) {
+            ci.cancel();
+        } else if (routed != sound) {
+            ci.cancel();
+            Minecraft.getInstance().getSoundManager().playDelayed(routed, delay);
+        }
+    }
+
+    @Inject(method = "queueTickingSound", at = @At("HEAD"), cancellable = true)
+    public void roundabout$filterTimeEraseMasterLoop(TickableSoundInstance sound, CallbackInfo ci) {
+        if (TimeEraseFractureEffect.isWorldAudioMuted()
+                && sound.getSource() == SoundSource.MASTER
+                && !TimeEraseFractureEffect.isAllowedTimeEraseSound(sound)) {
+            ci.cancel();
+        }
+    }
+
+"""
+    sound_manager_mixin.write_text(
+        sound_mixin_source[:close] + sound_injections + sound_mixin_source[close:],
+        encoding="utf-8"
+    )
+
 # Attach only the red future-image layer. The activating player's flame aura is
 # intentionally not registered; StandEntity targets are filtered in its predictor.
 living_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/ZLivingEntityRenderer.java"

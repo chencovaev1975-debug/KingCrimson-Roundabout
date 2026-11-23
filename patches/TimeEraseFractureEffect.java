@@ -605,9 +605,9 @@ public final class TimeEraseFractureEffect {
 
         View(Camera camera) {
             Vec3 position = camera.getPosition();
-            x = position..x;
-            y = position..y;
-            z = position..z;
+            x = position.x;
+            y = position.y;
+            z = position.z;
             double yaw = Math.toRadians(camera.getYRot());
             double pitch = Math.toRadians(camera.getXRot());
             double horizontal = Math.cos(pitch);

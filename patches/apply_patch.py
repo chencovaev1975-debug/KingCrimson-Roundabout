@@ -131,7 +131,7 @@ replace_once(
                 $$2
         );
 
-        buffer.method_22993();""",
+        buffer.endBatch();""",
     """        rdbt$renderTerrainFragments(
                 $$0,
                 buffer,

@@ -81,7 +81,7 @@ public final class TimeEraseFractureEffect {
     };
     private static final RenderType ROCK_RENDER_TYPE =
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
-remove old glitch quad data    private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
+    private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
@@ -338,15 +338,12 @@ remove old glitch quad data    private static final List<BlockRecord> BLOCKS = n
         if (!effectActive || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-        if (elapsedTicks < SHATTER_TICK + ROCK_EMERGENCE_TICKS + ROCK_MAX_SPAWN_DELAY_TICKS) {
-            // Keep opaque upper terrain over the fragments while they rise.
-            // Depth testing hides each piece until it actually breaks free.
+        // The full captured terrain vanishes on the exact shatter tick.
+        // Rock creation is triggered by the same tick() threshold, so the
+        // debris burst and ground disappearance share one visual frame.
+        if (elapsedTicks < SHATTER_TICK) {
             renderCapturedScene(poseStack, buffer, view);
             buffer.endBatch();
-
-            if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
-                renderRocks(poseStack, buffer, view, partialTick);
-            }
         } else if (!ROCKS.isEmpty()) {
             renderRocks(poseStack, buffer, view, partialTick);
         }
@@ -857,7 +854,7 @@ remove old glitch quad data    private static final List<BlockRecord> BLOCKS = n
         Vec3 view = observer.getViewVector(partialTick).normalize();
         Vec3 directionToTarget = toTarget.scale(1.0D / Math.sqrt(distanceSquared));
         // A forward cone approximating the player's visible field of view.
-        if (view.dot(directionToTarget) < 0.12D) return null;
+        if (view.dot(directionToTarget) < 0.45D) return null;
 
         Vec3 movement = target.getDeltaMovement();
         Vec3 horizontalMovement = new Vec3(movement.x, 0.0D, movement.z);

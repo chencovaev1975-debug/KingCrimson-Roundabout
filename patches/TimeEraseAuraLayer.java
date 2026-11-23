@@ -18,12 +18,13 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import org.joml.Matrix4f;
 
-/** Pulsing crimson-magenta shell and custom rising flame billboards for the activating player. */
+/**
+ * A contour-only Diavolo aura. The player's model is never tinted or filled:
+ * narrow red flame ribbons follow the body's outer perimeter instead.
+ */
 public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityModel<T>> extends RenderLayer<T, M> {
     private static final ResourceLocation WHITE_TEXTURE =
             new ResourceLocation(Roundabout.MOD_ID, "textures/misc/flat_white.png");
-    private static final ResourceLocation AURA_TEXTURE =
-            new ResourceLocation(Roundabout.MOD_ID, "textures/misc/diavolo_aura.png");
     private static final int FULL_BRIGHT = LightTexture.FULL_BRIGHT;
 
     public TimeEraseAuraLayer(RenderLayerParent<T, M> parent) {
@@ -40,74 +41,103 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
             return;
         }
 
-        float pulse = 0.5F + 0.5F * (float) Math.sin((entity.tickCount + partialTicks) * 0.34F);
-        float shellAlpha = 0.23F + pulse * 0.10F;
-
-        poseStack.pushPose();
-        try {
-            poseStack.scale(1.055F + pulse * 0.008F,
-                    1.050F + pulse * 0.008F,
-                    1.055F + pulse * 0.008F);
-
-            VertexConsumer shell = buffer.getBuffer(RenderType.entityTranslucentEmissive(WHITE_TEXTURE));
-            getParentModel().renderToBuffer(
-                    poseStack, shell, FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
-                    0.76F, 0.015F, 0.075F, shellAlpha
-            );
-
-            float scroll = -(entity.tickCount + partialTicks) * 0.0065F;
-            VertexConsumer flame = buffer.getBuffer(RenderType.energySwirl(AURA_TEXTURE, 0.0F, scroll));
-            getParentModel().renderToBuffer(
-                    poseStack, flame, FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
-                    1.0F, 0.015F, 0.18F, 0.34F + pulse * 0.12F
-            );
-        } finally {
-            poseStack.popPose();
-        }
-
-        renderRisingFlames(poseStack, buffer, entity, partialTicks);
-        renderMovementTrail(poseStack, buffer, entity, partialTicks);
-    }
-
-    private static void renderRisingFlames(PoseStack poseStack, MultiBufferSource buffer,
-                                           LivingEntity entity, float partialTicks) {
         float age = entity.tickCount + partialTicks;
-        VertexConsumer consumer = buffer.getBuffer(RenderType.energySwirl(
-                AURA_TEXTURE, 0.0F, -age * 0.008F));
-        for (int i = 0; i < 9; i++) {
-            float phase = (age * 0.055F + i * 0.137F) % 1.0F;
-            float angle = i * 2.39996F + age * 0.014F;
-            // Billboards are positioned in entity-local block units, close to
-            // the legs, shoulders and back (not in raw 1/16 model coordinates).
-            float radiusX = 0.30F + (float) Math.sin(age * 0.09F + i) * 0.045F;
-            float radiusZ = 0.24F + (float) Math.cos(age * 0.075F + i * 0.7F) * 0.035F;
-            float x = (float) Math.cos(angle) * radiusX;
-            float z = (float) Math.sin(angle) * radiusZ;
-            float y = -0.10F - phase * 1.72F;
-            float halfWidth = 0.055F + 0.035F * (1.0F - phase);
-            float halfHeight = 0.16F + 0.10F * (float) Math.sin(Math.PI * phase);
-            int alpha = 135 + (int) (75.0F * (1.0F - phase));
+        float pulse = 0.82F + 0.18F * (float) Math.sin(age * 0.24F);
+        VertexConsumer aura = buffer.getBuffer(RenderType.entityTranslucentEmissive(WHITE_TEXTURE));
 
-            poseStack.pushPose();
-            try {
-                poseStack.translate(x, y, z);
-                poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
-                emitFlameQuad(consumer, poseStack.last().pose(),
-                        halfWidth, halfHeight, 245, 18, 58, alpha);
-            } finally {
-                poseStack.popPose();
-            }
+        renderContourFlames(poseStack, aura, age, pulse);
+        renderMovementTrail(poseStack, aura, entity, age);
+    }
+
+    /**
+     * Thirty-two narrow, wavy tongues rise around the feet, legs, torso, arms,
+     * shoulders and head. Each strip faces outward from the body; the center
+     * remains completely transparent so the skin stays visible.
+     */
+    private static void renderContourFlames(PoseStack poseStack, VertexConsumer consumer,
+                                            float age, float pulse) {
+        Matrix4f matrix = poseStack.last().pose();
+        for (int i = 0; i < 32; i++) {
+            float angle = (float) (Math.PI * 2.0D * i / 32.0D) + age * 0.0035F;
+            float startY = -0.035F - (i % 8) * 0.185F;
+            float height = 0.42F + (i % 5) * 0.105F
+                    + 0.045F * (float) Math.sin(age * 0.08F + i * 1.7F);
+            float width = 0.030F + (i % 4) * 0.006F;
+            float phase = i * 1.73F;
+            emitFlameTongue(consumer, matrix, angle, startY, height, width, phase, age, pulse, true);
+            emitFlameTongue(consumer, matrix, angle, startY, height, width, phase, age, pulse, false);
         }
     }
 
-    private static void renderMovementTrail(PoseStack poseStack, MultiBufferSource buffer,
-                                            LivingEntity entity, float partialTicks) {
+    private static void emitFlameTongue(VertexConsumer consumer, Matrix4f matrix,
+                                        float angle, float startY, float height,
+                                        float baseWidth, float phase, float age,
+                                        float pulse, boolean outerGlow) {
+        final int segments = 7;
+        float normalX = (float) Math.cos(angle);
+        float normalZ = (float) Math.sin(angle);
+        float tangentX = -normalZ;
+        float tangentZ = normalX;
+
+        for (int segment = 0; segment < segments; segment++) {
+            float t0 = segment / (float) segments;
+            float t1 = (segment + 1) / (float) segments;
+            float y0 = startY - t0 * height;
+            float y1 = startY - t1 * height;
+            float wave0 = (float) Math.sin(age * 0.11F + phase + t0 * 6.2F) * 0.024F;
+            float wave1 = (float) Math.sin(age * 0.11F + phase + t1 * 6.2F) * 0.024F;
+
+            float[] radius0 = contourRadius(-y0);
+            float[] radius1 = contourRadius(-y1);
+            float x0 = normalX * (radius0[0] + wave0);
+            float z0 = normalZ * (radius0[1] + wave0);
+            float x1 = normalX * (radius1[0] + wave1);
+            float z1 = normalZ * (radius1[1] + wave1);
+
+            float taper0 = (float) Math.pow(Math.max(0.0F, Math.sin(Math.PI * (0.06F + 0.88F * t0))), 0.72D);
+            float taper1 = (float) Math.pow(Math.max(0.0F, Math.sin(Math.PI * (0.06F + 0.88F * t1))), 0.72D);
+            float half0 = baseWidth * taper0 * (outerGlow ? 2.35F : 0.78F);
+            float half1 = baseWidth * taper1 * (outerGlow ? 2.35F : 0.78F);
+            float fade0 = (float) Math.pow(Math.max(0.0F, Math.sin(Math.PI * (0.04F + 0.92F * t0))), 0.65D);
+            float fade1 = (float) Math.pow(Math.max(0.0F, Math.sin(Math.PI * (0.04F + 0.92F * t1))), 0.65D);
+
+            int alphaBase = outerGlow ? 38 : 174;
+            float alpha0 = alphaBase * fade0 * pulse;
+            float alpha1 = alphaBase * fade1 * pulse;
+            int red0 = (int) (128.0F + 127.0F * t0);
+            int red1 = (int) (128.0F + 127.0F * t1);
+            int blue0 = (int) (51.0F * t0);
+            int blue1 = (int) (51.0F * t1);
+
+            flameVertex(consumer, matrix, x0 - tangentX * half0, y0, z0 - tangentZ * half0,
+                    0.0F, t0, red0, 0, blue0, alpha0, normalX, normalZ);
+            flameVertex(consumer, matrix, x0 + tangentX * half0, y0, z0 + tangentZ * half0,
+                    1.0F, t0, red0, 0, blue0, alpha0, normalX, normalZ);
+            flameVertex(consumer, matrix, x1 + tangentX * half1, y1, z1 + tangentZ * half1,
+                    1.0F, t1, red1, 0, blue1, alpha1, normalX, normalZ);
+            flameVertex(consumer, matrix, x1 - tangentX * half1, y1, z1 - tangentZ * half1,
+                    0.0F, t1, red1, 0, blue1, alpha1, normalX, normalZ);
+        }
+    }
+
+    /**
+     * Approximate the outside of a player model: slim legs below the waist,
+     * broader torso/arms through the middle, then the head at the top.
+     */
+    private static float[] contourRadius(float height) {
+        if (height < 0.48F) return new float[] {0.18F, 0.13F};
+        if (height < 1.18F) return new float[] {0.285F, 0.18F};
+        if (height < 1.48F) return new float[] {0.405F, 0.18F};
+        return new float[] {0.19F, 0.155F};
+    }
+
+    private static void renderMovementTrail(PoseStack poseStack, VertexConsumer consumer,
+                                            LivingEntity entity, float age) {
         double vx = entity.getDeltaMovement().x;
         double vz = entity.getDeltaMovement().z;
         double speed = Math.sqrt(vx * vx + vz * vz);
         if (speed < 0.025D) return;
 
-        float age = entity.tickCount + partialTicks;
         float bodyYaw = (float) Math.toRadians(entity.yBodyRot);
         float localVX = (float) (Math.cos(bodyYaw) * vx + Math.sin(bodyYaw) * vz);
         float localVZ = (float) (Math.sin(bodyYaw) * vx - Math.cos(bodyYaw) * vz);
@@ -116,49 +146,51 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
         localVX /= localLength;
         localVZ /= localLength;
 
-        VertexConsumer consumer = buffer.getBuffer(RenderType.entityTranslucentEmissive(AURA_TEXTURE));
-        for (int i = 0; i < 5; i++) {
-            float distance = 0.12F + i * 0.10F;
-            float x = -localVX * distance + (float) Math.sin(age * 0.14F + i) * 0.025F;
+        Matrix4f matrix = poseStack.last().pose();
+        for (int i = 0; i < 4; i++) {
+            float distance = 0.14F + i * 0.115F;
+            float x = -localVX * distance + (float) Math.sin(age * 0.10F + i) * 0.022F;
             float z = -localVZ * distance;
-            float y = -0.72F - i * 0.13F;
-            float alpha = Math.max(0.08F, 0.30F - i * 0.045F);
-
-            poseStack.pushPose();
-            try {
-                poseStack.translate(x, y, z);
-                poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
-                emitFlameQuad(consumer, poseStack.last().pose(),
-                        0.045F, 0.17F + i * 0.012F, 220, 8, 45, (int) (alpha * 255.0F));
-            } finally {
-                poseStack.popPose();
-            }
+            float y = -0.62F - i * 0.16F;
+            float alpha = Math.max(0.0F, 0.27F - i * 0.065F);
+            emitBillboardFlame(poseStack, consumer, x, y, z,
+                    0.040F, 0.14F + i * 0.02F, alpha);
         }
     }
 
-    private static void emitFlameQuad(VertexConsumer consumer, Matrix4f matrix,
-                                      float halfWidth, float halfHeight,
-                                      int red, int green, int blue, int alpha) {
-        // The broad root is deep red; the narrow rising tip shifts to hot magenta.
-        flameVertex(consumer, matrix, -halfWidth, halfHeight, 0.0F, 0.0F, 1.0F,
-                139, 0, 0, alpha);
-        flameVertex(consumer, matrix, halfWidth, halfHeight, 0.0F, 1.0F, 1.0F,
-                139, 0, 0, alpha);
-        flameVertex(consumer, matrix, halfWidth * 0.12F, -halfHeight, 0.0F, 1.0F, 0.0F,
-                255, 0, 85, alpha);
-        flameVertex(consumer, matrix, -halfWidth * 0.12F, -halfHeight, 0.0F, 0.0F, 0.0F,
-                255, 0, 85, alpha);
+    private static void emitBillboardFlame(PoseStack poseStack, VertexConsumer consumer,
+                                           float x, float y, float z,
+                                           float halfWidth, float halfHeight, float alpha) {
+        poseStack.pushPose();
+        try {
+            poseStack.translate(x, y, z);
+            poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
+            Matrix4f matrix = poseStack.last().pose();
+            int rootAlpha = (int) (145.0F * alpha);
+            int tipAlpha = 0;
+            flameVertex(consumer, matrix, -halfWidth, halfHeight, 0.0F,
+                    0.0F, 1.0F, 128, 0, 0, rootAlpha, 0.0F, 1.0F);
+            flameVertex(consumer, matrix, halfWidth, halfHeight, 0.0F,
+                    1.0F, 1.0F, 128, 0, 0, rootAlpha, 0.0F, 1.0F);
+            flameVertex(consumer, matrix, halfWidth * 0.12F, -halfHeight, 0.0F,
+                    1.0F, 0.0F, 255, 0, 51, tipAlpha, 0.0F, 1.0F);
+            flameVertex(consumer, matrix, -halfWidth * 0.12F, -halfHeight, 0.0F,
+                    0.0F, 0.0F, 255, 0, 51, tipAlpha, 0.0F, 1.0F);
+        } finally {
+            poseStack.popPose();
+        }
     }
 
     private static void flameVertex(VertexConsumer consumer, Matrix4f matrix,
                                     float x, float y, float z, float u, float v,
-                                    int red, int green, int blue, int alpha) {
+                                    int red, int green, int blue, float alpha,
+                                    float normalX, float normalZ) {
         consumer.vertex(matrix, x, y, z)
-                .color(red, green, blue, alpha)
+                .color(red, green, blue, Math.max(0.0F, Math.min(255.0F, alpha)))
                 .uv(u, v)
                 .overlayCoords(OverlayTexture.NO_OVERLAY)
                 .uv2(FULL_BRIGHT)
-                .normal(0.0F, 0.0F, 1.0F)
+                .normal(normalX, 0.0F, normalZ)
                 .endVertex();
     }
 }

@@ -42,8 +42,8 @@ public final class TimeEraseFractureEffect {
     private static final int RADIUS = 20;
     private static final int BAND_COUNT = 4;
     private static final int BAND_RADIUS = RADIUS / BAND_COUNT;
-    private static final int MAX_BLOCKS = 1600;
-    private static final int[] BAND_CAPS = {130, 300, 470, 700};
+    private static final int MAX_BLOCKS = 1800;
+    private static final int[] BAND_CAPS = {140, 340, 550, 770};
     private static final int OBJECT_SCAN_ABOVE = 32;
     private static final int OBJECT_SCAN_BELOW = 24;
 
@@ -204,8 +204,13 @@ public final class TimeEraseFractureEffect {
         int capacity = BAND_CAPS[bandIndex];
         Random random = new Random((((long) cx) << 32) ^ (((long) cz) << 1)
                 ^ cy ^ (0x4B435246L + bandIndex * 0x9E3779B9L));
-        List<BlockSnapshot> reservoir = new ArrayList<>(capacity);
-        int seen = 0;
+
+        // Keep the ground surface for every column first. Remaining capacity
+        // is reserved for extra exposed models such as trunks, leaves, plants,
+        // cliff sides and nearby structures.
+        List<BlockSnapshot> surfaceSnapshots = new ArrayList<>(capacity);
+        List<BlockSnapshot> objectReservoir = new ArrayList<>(capacity);
+        int seenObjects = 0;
         BlockPos.MutableBlockPos scanPos = new BlockPos.MutableBlockPos();
 
         for (int x = cx - outerRadius; x <= cx + outerRadius; x++) {
@@ -221,10 +226,19 @@ public final class TimeEraseFractureEffect {
                 int surfaceY = findTerrainSurfaceY(level, x, z);
                 if (surfaceY == Integer.MIN_VALUE) continue;
 
+                scanPos.set(x, surfaceY, z);
+                BlockState surfaceState = level.getBlockState(scanPos);
+                if (!surfaceState.isAir()
+                        && surfaceState.getFluidState().isEmpty()
+                        && surfaceState.getRenderShape() != RenderShape.INVISIBLE) {
+                    surfaceSnapshots.add(new BlockSnapshot(x, surfaceY, z, surfaceState));
+                }
+
                 int minY = Math.max(level.getMinBuildHeight(), surfaceY - OBJECT_SCAN_BELOW);
                 int maxY = Math.min(level.getMaxBuildHeight() - 1, surfaceY + OBJECT_SCAN_ABOVE);
 
                 for (int y = maxY; y >= minY; y--) {
+                    if (y == surfaceY) continue;
                     scanPos.set(x, y, z);
                     BlockState state = level.getBlockState(scanPos);
                     if (state.isAir()
@@ -234,21 +248,29 @@ public final class TimeEraseFractureEffect {
                         continue;
                     }
 
-                    seen++;
+                    seenObjects++;
                     BlockSnapshot snapshot = new BlockSnapshot(x, y, z, state);
-                    if (reservoir.size() < capacity) {
-                        reservoir.add(snapshot);
+                    if (objectReservoir.size() < capacity) {
+                        objectReservoir.add(snapshot);
                     } else {
-                        int replace = random.nextInt(seen);
-                        if (replace < capacity) reservoir.set(replace, snapshot);
+                        int replace = random.nextInt(seenObjects);
+                        if (replace < capacity) objectReservoir.set(replace, snapshot);
                     }
                 }
             }
         }
 
-        for (BlockSnapshot snapshot : reservoir) {
-            if (BLOCKS.size() >= MAX_BLOCKS) break;
+        int added = 0;
+        for (BlockSnapshot snapshot : surfaceSnapshots) {
+            if (BLOCKS.size() >= MAX_BLOCKS || added >= capacity) break;
             BLOCKS.add(new BlockRecord(level, snapshot));
+            added++;
+        }
+
+        int extraCapacity = Math.max(0, capacity - added);
+        for (int i = 0; i < objectReservoir.size() && i < extraCapacity; i++) {
+            if (BLOCKS.size() >= MAX_BLOCKS) break;
+            BLOCKS.add(new BlockRecord(level, objectReservoir.get(i)));
         }
     }
 

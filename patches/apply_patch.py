@@ -66,7 +66,7 @@ if not fracture_source.exists():
 fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding="utf-8")
 
 # Start the effect on the local client's Time Erase rising edge, and let its own
-# 60-tick client timer finish independently of the server-side ability duration.
+# incremental client snapshot timer advance independently of server-side world data.
 replace_once(
     client,
     """                if (PKC.isUsingTimeErase()){
@@ -169,7 +169,7 @@ update_source_once(
     powers,
     "return ClientNetworking.getAppropriateConfig().kingCrimsonSettings.timeEraseDuration;",
     "return 28 * 20;",
-    "extend Time Erase by 23 seconds"
+    "set Time Erase to exactly 28 seconds"
 )
 
 mod_sounds = root / "common/src/main/java/net/hydra/jojomod/sound/ModSounds.java"

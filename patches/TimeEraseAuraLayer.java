@@ -75,13 +75,15 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
         for (int i = 0; i < 9; i++) {
             float phase = (age * 0.055F + i * 0.137F) % 1.0F;
             float angle = i * 2.39996F + age * 0.014F;
-            float radiusX = 5.2F + (float) Math.sin(age * 0.09F + i) * 1.1F;
-            float radiusZ = 3.6F + (float) Math.cos(age * 0.075F + i * 0.7F) * 0.8F;
+            // Billboards are positioned in entity-local block units, close to
+            // the legs, shoulders and back (not in raw 1/16 model coordinates).
+            float radiusX = 0.30F + (float) Math.sin(age * 0.09F + i) * 0.045F;
+            float radiusZ = 0.24F + (float) Math.cos(age * 0.075F + i * 0.7F) * 0.035F;
             float x = (float) Math.cos(angle) * radiusX;
             float z = (float) Math.sin(angle) * radiusZ;
-            float y = 21.0F - phase * 29.0F;
-            float halfWidth = 0.85F + 0.55F * (1.0F - phase);
-            float halfHeight = 3.0F + 2.0F * (float) Math.sin(Math.PI * phase);
+            float y = -0.10F - phase * 1.72F;
+            float halfWidth = 0.055F + 0.035F * (1.0F - phase);
+            float halfHeight = 0.16F + 0.10F * (float) Math.sin(Math.PI * phase);
             int alpha = 135 + (int) (75.0F * (1.0F - phase));
 
             poseStack.pushPose();
@@ -114,18 +116,18 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
 
         VertexConsumer consumer = buffer.getBuffer(RenderType.entityTranslucentEmissive(AURA_TEXTURE));
         for (int i = 0; i < 5; i++) {
-            float distance = 4.0F + i * 2.2F;
-            float x = -localVX * distance + (float) Math.sin(age * 0.14F + i) * 0.6F;
-            float z = -localVZ * distance + 3.5F;
-            float y = 4.0F + i * 3.8F;
-            float alpha = Math.max(0.08F, 0.28F - i * 0.035F);
+            float distance = 0.12F + i * 0.10F;
+            float x = -localVX * distance + (float) Math.sin(age * 0.14F + i) * 0.025F;
+            float z = -localVZ * distance;
+            float y = -0.72F - i * 0.13F;
+            float alpha = Math.max(0.08F, 0.30F - i * 0.045F);
 
             poseStack.pushPose();
             try {
                 poseStack.translate(x, y, z);
                 poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
                 emitFlameQuad(consumer, poseStack.last().pose(),
-                        0.42F, 2.3F + i * 0.12F, 220, 8, 45, (int) (alpha * 255.0F));
+                        0.045F, 0.17F + i * 0.012F, 220, 8, 45, (int) (alpha * 255.0F));
             } finally {
                 poseStack.popPose();
             }
@@ -135,14 +137,15 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
     private static void emitFlameQuad(VertexConsumer consumer, Matrix4f matrix,
                                       float halfWidth, float halfHeight,
                                       int red, int green, int blue, int alpha) {
+        // The broad root is deep red; the narrow rising tip shifts to hot magenta.
         flameVertex(consumer, matrix, -halfWidth, halfHeight, 0.0F, 0.0F, 1.0F,
-                red, green, blue, alpha);
+                139, 0, 0, alpha);
         flameVertex(consumer, matrix, halfWidth, halfHeight, 0.0F, 1.0F, 1.0F,
-                red, green, blue, alpha);
+                139, 0, 0, alpha);
         flameVertex(consumer, matrix, halfWidth * 0.12F, -halfHeight, 0.0F, 1.0F, 0.0F,
-                red, green, blue, alpha);
+                255, 0, 85, alpha);
         flameVertex(consumer, matrix, -halfWidth * 0.12F, -halfHeight, 0.0F, 0.0F, 0.0F,
-                red, green, blue, alpha);
+                255, 0, 85, alpha);
     }
 
     private static void flameVertex(VertexConsumer consumer, Matrix4f matrix,

@@ -75,13 +75,13 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
         for (int i = 0; i < 9; i++) {
             float phase = (age * 0.055F + i * 0.137F) % 1.0F;
             float angle = i * 2.39996F + age * 0.014F;
-            float radiusX = 0.34F + (float) Math.sin(age * 0.09F + i) * 0.035F;
-            float radiusZ = 0.27F + (float) Math.cos(age * 0.075F + i * 0.7F) * 0.025F;
+            float radiusX = 5.2F + (float) Math.sin(age * 0.09F + i) * 1.1F;
+            float radiusZ = 3.6F + (float) Math.cos(age * 0.075F + i * 0.7F) * 0.8F;
             float x = (float) Math.cos(angle) * radiusX;
             float z = (float) Math.sin(angle) * radiusZ;
-            float y = 0.88F - phase * 1.72F;
-            float halfWidth = 0.065F + 0.04F * (1.0F - phase);
-            float halfHeight = 0.18F + 0.11F * (float) Math.sin(Math.PI * phase);
+            float y = 21.0F - phase * 29.0F;
+            float halfWidth = 0.85F + 0.55F * (1.0F - phase);
+            float halfHeight = 3.0F + 2.0F * (float) Math.sin(Math.PI * phase);
             int alpha = 135 + (int) (75.0F * (1.0F - phase));
 
             poseStack.pushPose();
@@ -114,10 +114,10 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
 
         VertexConsumer consumer = buffer.getBuffer(RenderType.entityTranslucentEmissive(AURA_TEXTURE));
         for (int i = 0; i < 5; i++) {
-            float distance = 0.18F + i * 0.095F;
-            float x = -localVX * distance + (float) Math.sin(age * 0.14F + i) * 0.035F;
-            float z = -localVZ * distance;
-            float y = 0.55F - i * 0.055F;
+            float distance = 4.0F + i * 2.2F;
+            float x = -localVX * distance + (float) Math.sin(age * 0.14F + i) * 0.6F;
+            float z = -localVZ * distance + 3.5F;
+            float y = 4.0F + i * 3.8F;
             float alpha = Math.max(0.08F, 0.28F - i * 0.035F);
 
             poseStack.pushPose();
@@ -125,7 +125,7 @@ public final class TimeEraseAuraLayer<T extends LivingEntity, M extends EntityMo
                 poseStack.translate(x, y, z);
                 poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
                 emitFlameQuad(consumer, poseStack.last().pose(),
-                        0.035F, 0.18F + i * 0.008F, 220, 8, 45, (int) (alpha * 255.0F));
+                        0.42F, 2.3F + i * 0.12F, 220, 8, 45, (int) (alpha * 255.0F));
             } finally {
                 poseStack.popPose();
             }

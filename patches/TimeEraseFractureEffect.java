@@ -364,7 +364,7 @@ public final class TimeEraseFractureEffect {
      * category through the still-active MASTER output.
      */
     public static SoundInstance routeTimeEraseSound(SoundInstance sound) {
-        if (!ClientUtil.isUsingTimeErase) return sound;
+        if (!worldAudioMuted && !ClientUtil.isUsingTimeErase) return sound;
         if (!isAllowedTimeEraseSound(sound)) return null;
         if (sound.getSource() == SoundSource.MASTER) return sound;
 

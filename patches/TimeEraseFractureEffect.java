@@ -51,8 +51,8 @@ public final class TimeEraseFractureEffect {
     private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
-    private static final int ROCK_LIFETIME_TICKS = 140;
-    private static final int ROCK_FADE_TICKS = 28;
+    private static final int ROCK_LIFETIME_TICKS = 80;
+    private static final int ROCK_FADE_TICKS = 16;
     private static final int BIG_ROCK_COUNT = 20;
     private static final int MEDIUM_ROCK_COUNT = 10;
     private static final int SMALL_ROCK_COUNT = 8;
@@ -359,9 +359,8 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * Creates a large ground-launched stone burst: twenty massive diamond-like
-     * boulders, ten medium pieces and eight smaller chips.
-     * Spawn anchors in the forward four-block camera safety zone are rejected.
+     * Creates a ground-launched burst spread across a broad arc around the player:
+     * twenty giant boulders, ten medium pieces and eight smaller chips.
      */
     private static void createRocks() {
         ROCKS.clear();
@@ -379,7 +378,7 @@ public final class TimeEraseFractureEffect {
         // The large fragments are deliberately much larger than the previous
         // "big" meshes: roughly 7-9 blocks tall, with a broad broken-rock silhouette.
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 2.8D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 7.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
@@ -389,7 +388,7 @@ public final class TimeEraseFractureEffect {
         }
 
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.05D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 3.4D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
@@ -399,7 +398,7 @@ public final class TimeEraseFractureEffect {
         }
 
         for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.55D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.7D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
@@ -439,15 +438,16 @@ public final class TimeEraseFractureEffect {
     private static boolean isSafeVisibleAnchor(BlockRecord candidate) {
         double dx = candidate.x + 0.5D - centerX;
         double dz = candidate.z + 0.5D - centerZ;
+        double distanceSquared = dx * dx + dz * dz;
 
-        // Keep every rock in one compact patch in front of the player's facing
-        // direction. Nothing is selected behind the player or off to the sides.
-        double forwardDistance = dx * forwardX + dz * forwardZ;
-        if (forwardDistance < 5.0D || forwardDistance > 20.0D) return false;
+        // Spread fragments throughout the nearby area instead of placing them
+        // in one narrow strip. Keep a broad 156-degree arc in front and to both
+        // sides of the player so the burst is visible immediately.
+        if (distanceSquared < 30.25D || distanceSquared > 841.0D) return false;
 
-        double sideDistance = Math.abs(dx * forwardZ - dz * forwardX);
-        double allowedSideDistance = Math.min(4.2D, 1.8D + forwardDistance * 0.12D);
-        return sideDistance <= allowedSideDistance;
+        double distance = Math.sqrt(distanceSquared);
+        double facingDot = (dx * forwardX + dz * forwardZ) / distance;
+        return facingDot >= 0.20D;
     }
 
     private static void addRock(BlockRecord anchor, Random random,

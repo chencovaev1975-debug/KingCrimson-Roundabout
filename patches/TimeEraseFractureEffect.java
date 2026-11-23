@@ -832,8 +832,12 @@ public final class TimeEraseFractureEffect {
 
     /** Moves only the rendered real model a short step along the same path. */
     public static Vec3 getVisualBodyOffset(LivingEntity target, float partialTick) {
-        Vec3 future = predictForward(target, partialTick, 5);
-        return future == null ? null : future.subtract(target.getPosition(partialTick));
+        Vec3 future = getPredictedFuturePosition(target, partialTick);
+        if (future == null) return null;
+        Vec3 origin = target.getPosition(partialTick);
+        // The real model advances only one fifth of the prediction interval,
+        // leaving the full 1.25-second red hologram clearly ahead of it.
+        return future.subtract(origin).scale(0.20D);
     }
 
     private static Vec3 predictForward(LivingEntity target, float partialTick, int leadTicks) {

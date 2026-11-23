@@ -354,8 +354,9 @@ public final class TimeEraseFractureEffect {
         double dx = sound.getX() - player.getX();
         double dy = sound.getY() - (player.getY() + player.getBbHeight() * 0.5D);
         double dz = sound.getZ() - player.getZ();
-        // Roundabout emits the owner's stand attacks near the owner's position.
-        return dx * dx + dy * dy + dz * dz <= 14.0D * 14.0D;
+        // Roundabout emits the owner's stand attacks at, or just in front of,
+        // the owner. Keep this tight so a nearby opponent's hits stay muted.
+        return dx * dx + dy * dy + dz * dz <= 6.0D * 6.0D;
     }
 
     /**

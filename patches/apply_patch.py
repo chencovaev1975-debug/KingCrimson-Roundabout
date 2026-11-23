@@ -81,7 +81,7 @@ if hud_import not in hud_source:
     if hud_source.count(hud_client_import) != 1:
         raise SystemExit("Time Erase flash import: expected one ClientUtil import")
     hud_source = hud_source.replace(hud_client_import,
-            hud_client_import + "\\n" + hud_import, 1)
+            hud_client_import + chr(10) + hud_import, 1)
 
 flash_inject = """    @Inject(method = "renderHotbar", at = @At("TAIL"))
     private void roundabout$renderTimeEraseFlash(float partialTick, GuiGraphics guiGraphics, CallbackInfo ci) {

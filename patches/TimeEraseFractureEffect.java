@@ -3,6 +3,9 @@ package net.hydra.jojomod.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
+import net.minecraft.core.Direction;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.resources.model.BakedModel;
 import net.hydra.jojomod.sound.ModSounds;
 import net.hydra.jojomod.entity.stand.StandEntity;
 import net.hydra.jojomod.entity.KingCrimsonCloneEntity;
@@ -24,6 +27,7 @@ import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.AbstractFish;
 import net.minecraft.world.entity.animal.WaterAnimal;
@@ -35,6 +39,7 @@ import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +63,10 @@ public final class TimeEraseFractureEffect {
     private static final int OBJECT_SCAN_ABOVE = 40;
     private static final int OBJECT_SCAN_BELOW = 12;
 
+    // The first fractures open at exactly 1.60 seconds (32 client ticks),
+    // then spread across the captured ground before the rocks erupt at 2.30 seconds.
+    private static final int CRACK_START_TICK = 32;
+    private static final int CRACK_GROW_TICKS = 14;
     private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
@@ -89,6 +98,8 @@ public final class TimeEraseFractureEffect {
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
+    // Per-column procedural 3D fracture meshes; never a repeated texture or PNG.
+    private static final List<GroundCrack> GROUND_CRACKS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
             new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
     // Generated meshes are immutable after creation and reused by seed.
@@ -101,6 +112,7 @@ public final class TimeEraseFractureEffect {
     private static boolean effectActive;
     private static boolean customThemePlayed;
     private static boolean rocksCreated;
+    private static boolean groundCracksCreated;
     private static int elapsedTicks;
     private static long effectStartNanos;
     private static ClientLevel capturedLevel;
@@ -138,6 +150,8 @@ public final class TimeEraseFractureEffect {
                 BLOCKS.clear();
                 GROUND_ANCHORS.clear();
                 ROCKS.clear();
+                GROUND_CRACKS.clear();
+                groundCracksCreated = false;
                 FUTURE_PREDICTIONS.clear();
                 FUTURE_PARTICLE_TIMES.clear();
             } else {
@@ -157,6 +171,11 @@ public final class TimeEraseFractureEffect {
                                 (int) Math.floor(centerZ),
                                 bandIndex);
                     }
+                }
+
+                if (!groundCracksCreated && elapsedTicks >= CRACK_START_TICK) {
+                    createGroundCracks();
+                    groundCracksCreated = true;
                 }
 
                 if (!rocksCreated && elapsedTicks >= SHATTER_TICK) {
@@ -182,6 +201,7 @@ public final class TimeEraseFractureEffect {
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
+        GROUND_CRACKS.clear();
         capturedLevel = level;
         centerX = player.getX();
         centerY = player.getY();
@@ -192,6 +212,7 @@ public final class TimeEraseFractureEffect {
         effectActive = true;
         customThemePlayed = false;
         rocksCreated = false;
+        groundCracksCreated = false;
         FUTURE_PREDICTIONS.clear();
         FUTURE_PARTICLE_TIMES.clear();
         appliedCameraShake = 0.0F;
@@ -208,11 +229,13 @@ public final class TimeEraseFractureEffect {
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
+        GROUND_CRACKS.clear();
         capturedLevel = null;
         previousAbilityActive = false;
         effectActive = false;
         customThemePlayed = false;
         rocksCreated = false;
+        groundCracksCreated = false;
         elapsedTicks = 0;
         effectStartNanos = 0L;
         appliedCameraShake = 0.0F;
@@ -359,22 +382,28 @@ public final class TimeEraseFractureEffect {
         if (!effectActive || !ClientUtil.isUsingTimeErase || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
+        float dissolveProgress = 0.0F;
         if (elapsedTicks < SHATTER_TICK) {
             renderCapturedScene(poseStack, buffer, view, 0.0F);
             buffer.endBatch();
         } else {
-            // The ground begins disintegrating on the exact tick that the rocks
-            // launch. A four-tick dissolve is quick, but lets the rising chunks
-            // become visible through the fading terrain instead of leaving a void.
-            float dissolveProgress = Math.max(0.0F, Math.min(1.0F,
+            // The terrain begins its fast four-tick dissolve on the same frame
+            // that the rock fragments emerge from the fractured surface.
+            dissolveProgress = Math.max(0.0F, Math.min(1.0F,
                     (elapsedTicks + partialTick - SHATTER_TICK) / (float) GROUND_DISSOLVE_TICKS));
             if (dissolveProgress < 1.0F) {
                 renderCapturedScene(poseStack, buffer, view, dissolveProgress);
                 buffer.endBatch();
             }
-            if (!ROCKS.isEmpty()) {
-                renderRocks(poseStack, buffer, view, partialTick);
-            }
+        }
+
+        // 3D fracture channels grow outward from the player from 1.60s to 2.30s.
+        // During shatter, each crack disappears with the same terrain column.
+        if (groundCracksCreated && elapsedTicks >= CRACK_START_TICK) {
+            renderGroundCracks(poseStack, buffer, view, partialTick, dissolveProgress);
+        }
+        if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
+            renderRocks(poseStack, buffer, view, partialTick);
         }
     }
 

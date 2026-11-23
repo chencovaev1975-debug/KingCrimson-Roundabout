@@ -22,6 +22,11 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.client.resources.sounds.Sound;
+import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.client.sounds.SoundManager;
+import net.minecraft.client.sounds.WeighedSoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
@@ -118,6 +123,7 @@ public final class TimeEraseFractureEffect {
     private static boolean rocksCreated;
     private static boolean groundCracksCreated;
     private static boolean crackNetworkCreated;
+    private static boolean worldAudioMuted;
     private static int groundCrackBuildIndex;
     private static int elapsedTicks;
     private static long effectStartNanos;
@@ -145,6 +151,7 @@ public final class TimeEraseFractureEffect {
         // stopTheme also stops the registered event by ID, so no queued copy can continue.
         if (!abilityActive) {
             stopTheme();
+            restoreWorldAudio();
         }
 
         if (abilityActive && !previousAbilityActive) {
@@ -152,6 +159,7 @@ public final class TimeEraseFractureEffect {
         } else if (effectActive) {
             if (!ClientUtil.renderTimeErase()) {
                 stopTheme();
+                restoreWorldAudio();
                 effectActive = false;
                 BLOCKS.clear();
                 GROUND_ANCHORS.clear();
@@ -242,6 +250,7 @@ public final class TimeEraseFractureEffect {
         FUTURE_PREDICTIONS.clear();
         FUTURE_PARTICLE_TIMES.clear();
         appliedCameraShake = 0.0F;
+        muteWorldAudio();
 
         captureBand(level,
                 (int) Math.floor(centerX),
@@ -252,6 +261,7 @@ public final class TimeEraseFractureEffect {
 
     public static void reset() {
         stopTheme();
+        restoreWorldAudio();
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
@@ -271,6 +281,182 @@ public final class TimeEraseFractureEffect {
         appliedCameraShake = 0.0F;
         FUTURE_PREDICTIONS.clear();
         FUTURE_PARTICLE_TIMES.clear();
+    }
+
+    /**
+     * Mutes every world audio category locally while preserving the user's
+     * configured slider values. Only live SoundManager category gains change.
+     * Allowed King Crimson sounds are re-routed through MASTER by the mixin,
+     * with their original category volume folded into the sound instance itself.
+     */
+    private static void muteWorldAudio() {
+        if (worldAudioMuted) return;
+        Minecraft minecraft = Minecraft.getInstance();
+        SoundManager soundManager = minecraft.getSoundManager();
+        for (SoundSource source : SoundSource.values()) {
+            if (source != SoundSource.MASTER) {
+                soundManager.updateSourceVolume(source, 0.0F);
+            }
+        }
+        worldAudioMuted = true;
+    }
+
+    /** Restores category gains from the player's current audio settings. */
+    private static void restoreWorldAudio() {
+        if (!worldAudioMuted) return;
+        Minecraft minecraft = Minecraft.getInstance();
+        SoundManager soundManager = minecraft.getSoundManager();
+        worldAudioMuted = false;
+        for (SoundSource source : SoundSource.values()) {
+            if (source != SoundSource.MASTER) {
+                soundManager.updateSourceVolume(
+                        source, minecraft.options.getSoundSourceVolume(source));
+            }
+        }
+    }
+
+    public static boolean isWorldAudioMuted() {
+        return worldAudioMuted;
+    }
+
+    /**
+     * The allowlist is intentionally narrow: only activation, end, Diavolo's
+     * theme and King Crimson's own nearby punch/barrage sounds remain audible.
+     */
+    public static boolean isAllowedTimeEraseSound(SoundInstance sound) {
+        if (sound == null) return false;
+        ResourceLocation id = sound.getLocation();
+
+        if (id.equals(ModSounds.TIME_ERASE_FULL_ID)
+                || id.equals(ModSounds.TIME_ERASE_END_ID)
+                || id.equals(ModSounds.DIAVOLO_THEME_ID)) {
+            return true;
+        }
+
+        String namespace = id.getNamespace();
+        String path = id.getPath();
+        boolean kingCrimsonCombat =
+                "roundabout".equals(namespace)
+                        && (path.equals("king_crimson_punch")
+                        || path.startsWith("king_crimson_punch_")
+                        || path.equals("punch_sfx1")
+                        || path.equals("punch_sfx2")
+                        || path.equals("punch_sfx3")
+                        || path.equals("punch_sfx4")
+                        || path.startsWith("stand_barrage_"));
+        boolean vanillaPlayerAttack =
+                "minecraft".equals(namespace)
+                        && path.startsWith("entity.player.attack.");
+        if (!kingCrimsonCombat && !vanillaPlayerAttack) return false;
+
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player == null) return false;
+        double dx = sound.getX() - player.getX();
+        double dy = sound.getY() - (player.getY() + player.getBbHeight() * 0.5D);
+        double dz = sound.getZ() - player.getZ();
+        // Roundabout emits the owner's stand attacks near the owner's position.
+        return dx * dx + dy * dy + dz * dz <= 14.0D * 14.0D;
+    }
+
+    /**
+     * null suppresses an event. Allowed events retain their 3D position and
+     * original category slider level while bypassing the temporarily muted
+     * category through the still-active MASTER output.
+     */
+    public static SoundInstance routeTimeEraseSound(SoundInstance sound) {
+        if (!ClientUtil.isUsingTimeErase) return sound;
+        if (!isAllowedTimeEraseSound(sound)) return null;
+        if (sound.getSource() == SoundSource.MASTER) return sound;
+
+        Minecraft minecraft = Minecraft.getInstance();
+        float originalCategoryVolume =
+                minecraft.options.getSoundSourceVolume(sound.getSource());
+        return new TimeEraseMasterSoundInstance(sound, originalCategoryVolume);
+    }
+
+    private static final class TimeEraseMasterSoundInstance implements SoundInstance {
+        private final SoundInstance original;
+        private final float originalCategoryVolume;
+
+        private TimeEraseMasterSoundInstance(SoundInstance original, float originalCategoryVolume) {
+            this.original = original;
+            this.originalCategoryVolume = originalCategoryVolume;
+        }
+
+        @Override
+        public ResourceLocation getLocation() {
+            return original.getLocation();
+        }
+
+        @Override
+        public WeighedSoundEvents resolve(SoundManager soundManager) {
+            return original.resolve(soundManager);
+        }
+
+        @Override
+        public Sound getSound() {
+            return original.getSound();
+        }
+
+        @Override
+        public SoundSource getSource() {
+            return SoundSource.MASTER;
+        }
+
+        @Override
+        public boolean isLooping() {
+            return original.isLooping();
+        }
+
+        @Override
+        public boolean isRelative() {
+            return original.isRelative();
+        }
+
+        @Override
+        public int getDelay() {
+            return original.getDelay();
+        }
+
+        @Override
+        public float getVolume() {
+            return original.getVolume() * originalCategoryVolume;
+        }
+
+        @Override
+        public float getPitch() {
+            return original.getPitch();
+        }
+
+        @Override
+        public double getX() {
+            return original.getX();
+        }
+
+        @Override
+        public double getY() {
+            return original.getY();
+        }
+
+        @Override
+        public double getZ() {
+            return original.getZ();
+        }
+
+        @Override
+        public Attenuation getAttenuation() {
+            return original.getAttenuation();
+        }
+
+        @Override
+        public boolean canStartSilent() {
+            return original.canStartSilent();
+        }
+
+        @Override
+        public boolean canPlaySound() {
+            return original.canPlaySound();
+        }
     }
 
     private static void stopTheme() {

@@ -57,6 +57,7 @@ public final class TimeEraseFractureEffect {
     private static final int OBJECT_SCAN_BELOW = 12;
 
     private static final int SHATTER_TICK = 46;
+    private static final int SLASH_START_TICK = SHATTER_TICK - 4;
     private static final int CAMERA_SHAKE_END_TICK = 64;
     private static final int CUSTOM_THEME_TICK = 84;
     private static final int ROCK_LIFETIME_TICKS = 50;
@@ -524,10 +525,11 @@ public final class TimeEraseFractureEffect {
                 driftX, driftZ, radialTravel, emergenceHeight,
                 scale, random.nextInt(3), emergenceTicks,
                 random.nextFloat() * 360.0F,
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.10F + random.nextFloat() * 0.18F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.07F + random.nextFloat() * 0.13F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.06F + random.nextFloat() * 0.12F),
-                (random.nextBoolean() ? 1.0F : -1.0F) * (0.06F + random.nextFloat() * 0.12F),
+                (random.nextFloat() - 0.5F) * 18.0F,
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.055F + random.nextFloat() * 0.075F),
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.035F + random.nextFloat() * 0.055F),
+                (random.nextFloat() - 0.5F) * 16.0F,
+                (random.nextBoolean() ? 1.0F : -1.0F) * (0.025F + random.nextFloat() * 0.045F),
                 random.nextFloat() * (float) (Math.PI * 2.0D),
                 0.045F + random.nextFloat() * 0.035F,
                 mesh
@@ -584,84 +586,94 @@ public final class TimeEraseFractureEffect {
             profile = random.nextInt(sizeClass == 1 ? 6 : 5);
         }
 
+        // Preserve the existing size silhouettes, but build a coherent fractured
+        // prism rather than independently twisting eight box corners.
         if (profile == 0) {
-            // Thin stone plate.
             halfX = 0.78F + random.nextFloat() * 0.18F;
             halfY = 0.30F + random.nextFloat() * 0.14F;
             halfZ = 0.58F + random.nextFloat() * 0.18F;
         } else if (profile == 1) {
-            // Tall angular splinter from a wall edge.
             halfX = 0.30F + random.nextFloat() * 0.16F;
             halfY = 0.78F + random.nextFloat() * 0.18F;
             halfZ = 0.48F + random.nextFloat() * 0.20F;
         } else if (profile == 2) {
-            // Long, narrow shard.
             halfX = 0.86F + random.nextFloat() * 0.16F;
             halfY = 0.32F + random.nextFloat() * 0.18F;
             halfZ = 0.30F + random.nextFloat() * 0.16F;
         } else if (profile == 3) {
-            // Heavy block with no dominant axis.
             halfX = 0.58F + random.nextFloat() * 0.20F;
             halfY = 0.54F + random.nextFloat() * 0.22F;
             halfZ = 0.58F + random.nextFloat() * 0.20F;
         } else if (profile == 4) {
-            // Thick wall slab, chipped along its narrow side.
             halfX = 0.70F + random.nextFloat() * 0.18F;
             halfY = 0.46F + random.nextFloat() * 0.18F;
             halfZ = 0.32F + random.nextFloat() * 0.16F;
         } else {
-            // Long, flat concrete beam with a broken cross-section.
             halfX = 1.02F + random.nextFloat() * 0.16F;
             halfY = 0.24F + random.nextFloat() * 0.10F;
             halfZ = 0.30F + random.nextFloat() * 0.12F;
         }
 
-        float[][] vertices = new float[8][3];
-        float leanX = (random.nextFloat() - 0.5F) * 0.16F * halfX;
-        float leanY = (random.nextFloat() - 0.5F) * 0.10F * halfY;
-        float leanZ = (random.nextFloat() - 0.5F) * 0.16F * halfZ;
+        int sides = 5 + random.nextInt(3);
+        float phase = random.nextFloat() * (float) (Math.PI * 2.0D);
+        float ringTwist = (random.nextFloat() - 0.5F) * 0.10F;
+        float leanX = (random.nextFloat() - 0.5F) * halfX * 0.10F;
+        float leanZ = (random.nextFloat() - 0.5F) * halfZ * 0.10F;
+        float[][] vertices = new float[sides * 3 + 2][3];
 
-        // One independently warped point in each octant. Keeping each point
-        // in its original octant preserves a closed, box-derived polyhedron.
-        for (int i = 0; i < 8; i++) {
-            float sx = (i & 1) == 0 ? -1.0F : 1.0F;
-            float sy = (i & 2) == 0 ? -1.0F : 1.0F;
-            float sz = (i & 4) == 0 ? -1.0F : 1.0F;
-
-            float rx = 0.84F + random.nextFloat() * 0.32F;
-            float ry = 0.82F + random.nextFloat() * 0.36F;
-            float rz = 0.84F + random.nextFloat() * 0.32F;
-
-            vertices[i] = new float[] {
-                    sx * halfX * rx + sy * leanX + (random.nextFloat() - 0.5F) * halfX * 0.08F,
-                    sy * halfY * ry + sz * leanY + (random.nextFloat() - 0.5F) * halfY * 0.08F,
-                    sz * halfZ * rz + sx * leanZ + (random.nextFloat() - 0.5F) * halfZ * 0.08F
-            };
+        // Three rings give each fragment a broad central body, chipped upper
+        // and lower edges, and connected planes with no pinched/twisted corners.
+        for (int ring = 0; ring < 3; ring++) {
+            for (int side = 0; side < sides; side++) {
+                float angle = phase + (float) (Math.PI * 2.0D * side / sides)
+                        + (ring - 1) * ringTwist;
+                float radialNoise = 0.90F + random.nextFloat() * 0.18F;
+                float chippedEdge = 1.0F + (float) Math.sin(side * 2.31F + phase) * 0.045F;
+                float radius = radialNoise * chippedEdge;
+                float ringX = ring == 0 ? -leanX * 0.25F
+                        : ring == 1 ? leanX : leanX * 0.55F;
+                float ringZ = ring == 0 ? -leanZ * 0.25F
+                        : ring == 1 ? leanZ : leanZ * 0.55F;
+                float x = (float) Math.cos(angle) * halfX * radius + ringX;
+                float z = (float) Math.sin(angle) * halfZ * radius + ringZ;
+                float y;
+                if (ring == 0) {
+                    y = -halfY * (0.76F + random.nextFloat() * 0.16F);
+                } else if (ring == 1) {
+                    y = (random.nextFloat() - 0.5F) * halfY * 0.24F;
+                } else {
+                    y = halfY * (0.72F + random.nextFloat() * 0.20F);
+                }
+                vertices[ring * sides + side] = new float[] {x, y, z};
+            }
         }
 
-        // Outward-wound sides of the deformed hexahedron.
-        int[][] quads = {
-                {0, 3, 2, 1}, // -Z
-                {4, 5, 6, 7}, // +Z
-                {0, 4, 7, 3}, // -X
-                {1, 2, 6, 5}, // +X
-                {0, 1, 5, 4}, // -Y
-                {3, 7, 6, 2}  // +Y
+        int lowerCenter = sides * 3;
+        int upperCenter = lowerCenter + 1;
+        vertices[lowerCenter] = new float[] {
+                leanX * 0.25F, -halfY * 0.78F, leanZ * 0.25F
+        };
+        vertices[upperCenter] = new float[] {
+                leanX * 0.55F, halfY * 0.76F, leanZ * 0.55F
         };
 
-        // Each side is split along a randomized diagonal. The renderer computes
-        // a separate normal for every triangle, giving crisp flat shading.
-        int[][] faces = new int[12][3];
+        int[][] faces = new int[sides * 6][3];
         int face = 0;
-        for (int[] quad : quads) {
-            int a = quad[0], b = quad[1], c = quad[2], d = quad[3];
-            if (random.nextBoolean()) {
-                faces[face++] = new int[] {a, b, c};
-                faces[face++] = new int[] {a, c, d};
-            } else {
-                faces[face++] = new int[] {a, b, d};
-                faces[face++] = new int[] {b, c, d};
-            }
+        for (int side = 0; side < sides; side++) {
+            int next = (side + 1) % sides;
+            int bottomA = side;
+            int bottomB = next;
+            int middleA = sides + side;
+            int middleB = sides + next;
+            int topA = sides * 2 + side;
+            int topB = sides * 2 + next;
+
+            faces[face++] = new int[] {bottomA, bottomB, middleB};
+            faces[face++] = new int[] {bottomA, middleB, middleA};
+            faces[face++] = new int[] {middleA, middleB, topB};
+            faces[face++] = new int[] {middleA, topB, topA};
+            faces[face++] = new int[] {lowerCenter, bottomB, bottomA};
+            faces[face++] = new int[] {upperCenter, topA, topB};
         }
 
         return new RockMesh(vertices, faces);
@@ -815,16 +827,17 @@ public final class TimeEraseFractureEffect {
     /** Returns the bottom-to-top slash reveal, or -1 when it is inactive. */
     public static float getSlashRevealProgress(float partialTick) {
         if (!effectActive) return -1.0F;
-        float age = elapsedTicks + partialTick;
+        float age = elapsedTicks + partialTick - SLASH_START_TICK;
         float total = SLASH_DRAW_TICKS + SLASH_FADE_TICKS;
         if (age < 0.0F || age >= total) return -1.0F;
-        return Math.min(1.0F, age / (float) SLASH_DRAW_TICKS);
+        float progress = Math.min(1.0F, age / (float) SLASH_DRAW_TICKS);
+        return progress * progress * (3.0F - 2.0F * progress);
     }
 
     /** The slash stays full-strength while drawing, then thins and fades over two ticks. */
     public static float getSlashFade(float partialTick) {
         if (!effectActive) return 0.0F;
-        float age = elapsedTicks + partialTick;
+        float age = elapsedTicks + partialTick - SLASH_START_TICK;
         if (age < 0.0F || age >= SLASH_DRAW_TICKS + SLASH_FADE_TICKS) return 0.0F;
         if (age <= SLASH_DRAW_TICKS) return 1.0F;
         return Math.max(0.0F, 1.0F - (age - SLASH_DRAW_TICKS) / (float) SLASH_FADE_TICKS);
@@ -892,16 +905,18 @@ public final class TimeEraseFractureEffect {
         double hazeX = future.x + (random.nextDouble() - 0.5D) * 0.28D;
         double hazeY = future.y + height * (0.48D + random.nextDouble() * 0.30D);
         double hazeZ = future.z + (random.nextDouble() - 0.5D) * 0.28D;
-        clientLevel.addParticle(ParticleTypes.DRAGON_BREATH,
+        clientLevel.addParticle(ParticleTypes.SMOKE,
                 hazeX, hazeY, hazeZ,
-                (random.nextDouble() - 0.5D) * 0.008D, 0.010D,
-                (random.nextDouble() - 0.5D) * 0.008D);
+                (random.nextDouble() - 0.5D) * 0.004D, 0.003D,
+                (random.nextDouble() - 0.5D) * 0.004D);
 
         double trailDistance = Math.min(0.85D, Math.max(0.30D, distance * 0.28D));
         double trailX = future.x + trailDirection.x * trailDistance;
         double trailY = future.y + height * 0.42D;
         double trailZ = future.z + trailDirection.z * trailDistance;
-        clientLevel.addParticle(ParticleTypes.CRIMSON_SPORE,
+        clientLevel.addParticle(
+                new net.minecraft.core.particles.DustParticleOptions(
+                        new org.joml.Vector3f(0.72F, 0.005F, 0.025F), 0.72F),
                 trailX + (random.nextDouble() - 0.5D) * 0.22D,
                 trailY + (random.nextDouble() - 0.5D) * 0.30D,
                 trailZ + (random.nextDouble() - 0.5D) * 0.22D,
@@ -1106,7 +1121,7 @@ public final class TimeEraseFractureEffect {
              float directionX, float directionZ,
              float radialTravel, float emergenceHeight,
              float scale, int spawnDelay, int emergenceTicks,
-             float yaw, float yawSpeed, float pitchSpeed,
+             float yaw, float pitch, float yawSpeed, float pitchSpeed,
              float roll, float rollSpeed,
              float hoverPhase, float hoverAmplitude, RockMesh mesh) {
             this.x = x;
@@ -1120,7 +1135,7 @@ public final class TimeEraseFractureEffect {
             this.spawnDelay = spawnDelay;
             this.emergenceTicks = emergenceTicks;
             this.yaw = yaw;
-            this.pitch = (yaw * 0.17F) % 35.0F;
+            this.pitch = pitch;
             this.yawSpeed = yawSpeed;
             this.pitchSpeed = pitchSpeed;
             this.roll = roll;

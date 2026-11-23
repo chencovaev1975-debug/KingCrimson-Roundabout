@@ -71,36 +71,6 @@ renderer.write_text(sky_source[:sky_start] + sky_section + sky_source[sky_end:],
 
 
 
-# Render the short rose-pink flash as a single fullscreen HUD overlay. This avoids
-# per-block geometry and keeps the effect independent of the camera/world mesh.
-hud = root / "common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java"
-hud_source = hud.read_text(encoding="utf-8")
-hud_import = "import net.hydra.jojomod.client.TimeEraseFractureEffect;"
-hud_client_import = "import net.hydra.jojomod.client.ClientUtil;"
-if hud_import not in hud_source:
-    if hud_source.count(hud_client_import) != 1:
-        raise SystemExit("Time Erase flash import: expected one ClientUtil import")
-    hud_source = hud_source.replace(hud_client_import,
-            hud_client_import + chr(10) + hud_import, 1)
-
-flash_inject = """    @Inject(method = "renderHotbar", at = @At("TAIL"))
-    private void roundabout$renderTimeEraseFlash(float partialTick, GuiGraphics guiGraphics, CallbackInfo ci) {
-        float alpha = TimeEraseFractureEffect.purpleFlashAlpha(partialTick);
-        if (alpha > 0.0F) {
-            int alphaByte = Math.min(255, Math.max(0, Math.round(alpha * 255.0F)));
-            guiGraphics.fill(0, 0, this.screenWidth, this.screenHeight,
-                    (alphaByte << 24) | 0xF45CA8);
-        }
-    }
-
-"""
-head_marker = '    @Inject(method = "renderHotbar", at = @At(value = "HEAD"))'
-if "roundabout$renderTimeEraseFlash" not in hud_source:
-    if hud_source.count(head_marker) != 1:
-        raise SystemExit("Time Erase flash hook: expected one renderHotbar HEAD injection")
-    hud_source = hud_source.replace(head_marker, flash_inject + head_marker, 1)
-hud.write_text(hud_source, encoding="utf-8")
-
 # Add the local-only fracture effect. The class is deliberately client-only and only
 # snapshots block states: it never edits blocks, entities, collision, or server state.
 fracture_class = root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseFractureEffect.java"

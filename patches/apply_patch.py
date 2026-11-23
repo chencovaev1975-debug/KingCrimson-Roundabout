@@ -55,9 +55,7 @@ replace_once(
     "hide clouds during the Time Erase skybox fade"
 )
 
-# Restore the End sky on the same frame the Time Erase ability is released.
-# renderTimeErase() remains true for the vanilla fade counter, but should no
-# longer keep the environment hidden once the ability itself has ended.
+# Restore the native End sky on the same frame the Time Erase ability is released.
 replace_once(
     renderer,
     """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {

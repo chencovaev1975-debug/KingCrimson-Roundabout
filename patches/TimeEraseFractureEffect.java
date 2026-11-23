@@ -57,12 +57,13 @@ public final class TimeEraseFractureEffect {
     private static final int CUSTOM_THEME_TICK = 84;
     private static final int ROCK_LIFETIME_TICKS = 50;
     private static final int ROCK_FADE_TICKS = 10;
+    private static final int ROCK_EMERGENCE_TICKS = 7;
     private static final int PURPLE_FLASH_START_TICK = 21;
     private static final int PURPLE_FLASH_DURATION_TICKS = 4;
-    private static final int BIG_ROCK_COUNT = 7;
-    private static final int MEDIUM_ROCK_COUNT = 4;
-    private static final int SMALL_ROCK_COUNT = 6;
-    private static final int CRUMB_ROCK_COUNT = 16;
+    private static final int BIG_ROCK_COUNT = 10;
+    private static final int MEDIUM_ROCK_COUNT = 12;
+    private static final int SMALL_ROCK_COUNT = 25;
+    private static final int PURPLE_BLOCK_ALPHA = 165;
 
     private static final int[][] NEIGHBORS = {
             {1, 0, 0}, {-1, 0, 0},
@@ -75,14 +76,30 @@ public final class TimeEraseFractureEffect {
     };
     private static final RenderType ROCK_RENDER_TYPE =
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
+    private static final float[][][] GLITCH_BLOCK_FACES = {
+            {{0,0,0}, {0,1,0}, {1,1,0}, {1,0,0}},
+            {{1,0,1}, {1,1,1}, {0,1,1}, {0,0,1}},
+            {{0,0,1}, {0,1,1}, {0,1,0}, {0,0,0}},
+            {{1,0,0}, {1,1,0}, {1,1,1}, {1,0,1}},
+            {{0,0,1}, {0,0,0}, {1,0,0}, {1,0,1}},
+            {{0,1,0}, {0,1,1}, {1,1,1}, {1,1,0}}
+    };
+    private static final float[][] GLITCH_BLOCK_NORMALS = {
+            {0,0,-1}, {0,0,1}, {-1,0,0},
+            {1,0,0}, {0,-1,0}, {0,1,0}
+    };
+    private static final float[][] GLITCH_QUAD_UV = {
+            {0,16}, {0,0}, {16,0}, {16,16}
+    };
 
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
     private static final List<Rock> ROCKS =
-            new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT + CRUMB_ROCK_COUNT);
+            new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT);
     // Generated meshes are immutable after creation and reused by seed.
     private static final Map<Long, RockMesh> ROCK_MESH_CACHE = new HashMap<>(64);
+    private static final Map<BlockState, TextureAtlasSprite> BLOCK_SPRITE_CACHE = new HashMap<>(128);
 
     private static boolean previousAbilityActive;
     private static boolean effectActive;
@@ -158,6 +175,7 @@ public final class TimeEraseFractureEffect {
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
+        BLOCK_SPRITE_CACHE.clear();
         capturedLevel = level;
         centerX = player.getX();
         centerY = player.getY();
@@ -181,6 +199,7 @@ public final class TimeEraseFractureEffect {
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
         ROCKS.clear();
+        BLOCK_SPRITE_CACHE.clear();
         capturedLevel = null;
         previousAbilityActive = false;
         effectActive = false;
@@ -327,9 +346,18 @@ public final class TimeEraseFractureEffect {
         if (!effectActive || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-        if (elapsedTicks < SHATTER_TICK) {
+        if (elapsedTicks < SHATTER_TICK + ROCK_EMERGENCE_TICKS) {
+            // Keep opaque upper terrain over the fragments while they rise.
+            // Depth testing hides each piece until it actually breaks free.
             renderCapturedScene(poseStack, buffer, view);
+            if (isPurpleBlockFlashActive(partialTick)) {
+                renderPurpleBlockFlash(poseStack, buffer, view);
+            }
             buffer.endBatch();
+
+            if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
+                renderRocks(poseStack, buffer, view, partialTick);
+            }
         } else if (!ROCKS.isEmpty()) {
             renderRocks(poseStack, buffer, view, partialTick);
         }
@@ -344,34 +372,90 @@ public final class TimeEraseFractureEffect {
             if (!isInView(record.x + 0.5D, record.y + 0.5D, record.z + 0.5D, camera)) continue;
 
             poseStack.pushPose();
-            poseStack.translate(
-                    record.x - camera.x,
-                    record.y - camera.y,
-                    record.z - camera.z
-            );
-            dispatcher.renderSingleBlock(
-                    record.state,
-                    poseStack,
-                    buffer,
-                    record.packedLight,
-                    OverlayTexture.NO_OVERLAY
-            );
-            poseStack.popPose();
+            try {
+                poseStack.translate(
+                        record.x - camera.x,
+                        record.y - camera.y,
+                        record.z - camera.z
+                );
+                dispatcher.renderSingleBlock(
+                        record.state,
+                        poseStack,
+                        buffer,
+                        record.packedLight,
+                        OverlayTexture.NO_OVERLAY
+                );
+            } finally {
+                poseStack.popPose();
+            }
         }
     }
 
-    /**
-     * A single soft violet screen flash, beginning exactly 1.05 seconds
-     * after Time Erase starts. The HUD mixin draws it as one fullscreen tint.
-     */
-    public static float purpleFlashAlpha(float partialTick) {
-        if (!effectActive) return 0.0F;
-
+    private static boolean isPurpleBlockFlashActive(float partialTick) {
+        if (!effectActive) return false;
         float age = elapsedTicks + partialTick - PURPLE_FLASH_START_TICK;
-        if (age < 0.0F || age >= PURPLE_FLASH_DURATION_TICKS) return 0.0F;
+        return age >= 0.0F && age < PURPLE_FLASH_DURATION_TICKS;
+    }
 
-        float progress = age / (float) PURPLE_FLASH_DURATION_TICKS;
-        return 0.36F * (float) Math.sin(Math.PI * progress);
+    /**
+     * Paint every captured block with a vivid translucent violet shell.
+     * All six faces are emitted, so the effect wraps around the full scene.
+     */
+    private static void renderPurpleBlockFlash(PoseStack poseStack,
+                                               MultiBufferSource.BufferSource buffer,
+                                               View camera) {
+        Minecraft minecraft = Minecraft.getInstance();
+        VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
+
+        for (BlockRecord record : BLOCKS) {
+            TextureAtlasSprite sprite = BLOCK_SPRITE_CACHE.computeIfAbsent(
+                    record.state,
+                    state -> minecraft.getBlockRenderer().getBlockModel(state).getParticleIcon()
+            );
+
+            poseStack.pushPose();
+            try {
+                poseStack.translate(
+                        record.x - camera.x,
+                        record.y - camera.y,
+                        record.z - camera.z
+                );
+                Matrix4f matrix = poseStack.last().pose();
+                org.joml.Matrix3f normalMatrix = poseStack.last().normal();
+                for (int face = 0; face < GLITCH_BLOCK_FACES.length; face++) {
+                    float[] normal = GLITCH_BLOCK_NORMALS[face];
+                    emitPurpleBlockFace(
+                            consumer, matrix, normalMatrix, sprite,
+                            GLITCH_BLOCK_FACES[face], normal[0], normal[1], normal[2]
+                    );
+                }
+            } finally {
+                poseStack.popPose();
+            }
+        }
+    }
+
+    private static void emitPurpleBlockFace(VertexConsumer consumer,
+                                             Matrix4f matrix,
+                                             org.joml.Matrix3f normalMatrix,
+                                             TextureAtlasSprite sprite,
+                                             float[][] face,
+                                             float nx, float ny, float nz) {
+        for (int i = 0; i < 4; i++) {
+            float[] point = face[i];
+            float[] uv = GLITCH_QUAD_UV[i];
+            float offset = 0.0015F;
+            consumer.vertex(matrix,
+                            point[0] + nx * offset,
+                            point[1] + ny * offset,
+                            point[2] + nz * offset)
+                    .color(155, 45, 255, PURPLE_BLOCK_ALPHA)
+                    .uv(sprite.getU(uv[0]), sprite.getV(uv[1]))
+                    .overlayCoords(OverlayTexture.NO_OVERLAY)
+                    .uv2(LightTexture.FULL_BRIGHT)
+                    .normal(normalMatrix, nx, ny, nz)
+                    .endVertex();
+        }
     }
 
     /**
@@ -389,51 +473,48 @@ public final class TimeEraseFractureEffect {
                         ^ 0x4B43524F434BL
         );
         List<BlockRecord> usedAnchors = new ArrayList<>(
-                BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT + CRUMB_ROCK_COUNT
+                BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT
         );
 
+        // Large plates and beams occupy the outer ring and travel the farthest.
         for (int i = 0; i < BIG_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 8.0D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 6.0D, 20.0D, 29.0D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    3.15F + random.nextFloat() * 0.35F,
-                    0.010F + random.nextFloat() * 0.012F,
-                    0.075F + random.nextFloat() * 0.025F);
+                    2.70F + random.nextFloat() * 0.50F,
+                    6.0F + random.nextFloat() * 3.0F,
+                    ROCK_EMERGENCE_TICKS,
+                    0);
         }
 
+        // Medium broken masonry stays in the middle band.
         for (int i = 0; i < MEDIUM_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 4.2D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 3.5D, 12.0D, 22.5D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    1.55F + random.nextFloat() * 0.35F,
-                    0.016F + random.nextFloat() * 0.016F,
-                    0.085F + random.nextFloat() * 0.025F);
+                    1.20F + random.nextFloat() * 0.45F,
+                    3.0F + random.nextFloat() * 2.5F,
+                    ROCK_EMERGENCE_TICKS,
+                    1);
         }
 
+        // Fine fragments remain in the inner band.
         for (int i = 0; i < SMALL_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 2.2D);
+            BlockRecord anchor = pickAnchor(random, usedAnchors, 1.0D, 5.5D, 14.5D);
             if (anchor == null) break;
             usedAnchors.add(anchor);
             addRock(anchor, random,
-                    0.78F + random.nextFloat() * 0.20F,
-                    0.024F + random.nextFloat() * 0.022F,
-                    0.095F + random.nextFloat() * 0.025F);
-        }
-
-        for (int i = 0; i < CRUMB_ROCK_COUNT; i++) {
-            BlockRecord anchor = pickAnchor(random, usedAnchors, 0.75D);
-            if (anchor == null) break;
-            usedAnchors.add(anchor);
-            addRock(anchor, random,
-                    0.18F + random.nextFloat() * 0.13F,
-                    0.035F + random.nextFloat() * 0.030F,
-                    0.12F + random.nextFloat() * 0.045F);
+                    0.28F + random.nextFloat() * 0.24F,
+                    1.0F + random.nextFloat() * 1.5F,
+                    ROCK_EMERGENCE_TICKS,
+                    2);
         }
     }
 
-    private static BlockRecord pickAnchor(Random random, List<BlockRecord> used, double minSpacing) {
+    private static BlockRecord pickAnchor(Random random, List<BlockRecord> used,
+                                          double minSpacing, double minRadius, double maxRadius) {
         // Try full spacing first, then relax it gradually to guarantee the
         // requested number of fragments on uneven or sparse terrain.
         double[] spacingFactors = {1.0D, 0.72D, 0.42D, 0.0D};
@@ -443,7 +524,8 @@ public final class TimeEraseFractureEffect {
 
             for (int attempt = 0; attempt < Math.max(900, GROUND_ANCHORS.size() * 2); attempt++) {
                 BlockRecord candidate = GROUND_ANCHORS.get(random.nextInt(GROUND_ANCHORS.size()));
-                if (used.contains(candidate) || !isSafeVisibleAnchor(candidate)) continue;
+                if (used.contains(candidate)
+                        || !isSafeVisibleAnchor(candidate, minRadius, maxRadius)) continue;
 
                 boolean spaced = true;
                 for (BlockRecord chosen : used) {
@@ -460,63 +542,67 @@ public final class TimeEraseFractureEffect {
         return null;
     }
 
-    private static boolean isSafeVisibleAnchor(BlockRecord candidate) {
+    private static boolean isSafeVisibleAnchor(BlockRecord candidate,
+                                               double minRadius, double maxRadius) {
         double dx = candidate.x + 0.5D - centerX;
         double dz = candidate.z + 0.5D - centerZ;
         double distanceSquared = dx * dx + dz * dz;
-
-        // No dependency on camera yaw or look direction: distribute fragments
-        // throughout the full 360-degree area around the player's position.
-        // Rocks behind the player remain in the world and appear when the
-        // player turns toward them.
-        return distanceSquared >= 30.25D && distanceSquared <= 841.0D;
+        // Each tier is distributed through the full 360-degree ring.
+        return distanceSquared >= minRadius * minRadius
+                && distanceSquared <= maxRadius * maxRadius;
     }
 
     private static void addRock(BlockRecord anchor, Random random,
-                                float scale, float horizontalSpeed, float verticalSpeed) {
+                                float scale, float radialTravel, int emergenceTicks,
+                                int sizeClass) {
         double dx = anchor.x + 0.5D - centerX;
         double dz = anchor.z + 0.5D - centerZ;
         double length = Math.sqrt(dx * dx + dz * dz);
         float directionX = length > 0.001D ? (float) (dx / length) : 0.0F;
         float directionZ = length > 0.001D ? (float) (dz / length) : 0.0F;
 
-        float velocityX = directionX * horizontalSpeed
-                + (random.nextFloat() - 0.5F) * 0.012F;
-        float velocityZ = directionZ * horizontalSpeed
-                + (random.nextFloat() - 0.5F) * 0.012F;
-        float velocityY = verticalSpeed;
+        float tangent = (random.nextFloat() - 0.5F) * 0.22F;
+        float driftX = directionX - directionZ * tangent;
+        float driftZ = directionZ + directionX * tangent;
+        float driftLength = (float) Math.sqrt(driftX * driftX + driftZ * driftZ);
+        if (driftLength > 0.001F) {
+            driftX /= driftLength;
+            driftZ /= driftLength;
+        }
 
-        // A per-piece seed makes the generated polyhedron stable and cacheable.
         long meshSeed = random.nextLong();
         RockMesh mesh = ROCK_MESH_CACHE.get(meshSeed);
         if (mesh == null) {
-            mesh = createRockMesh(new Random(meshSeed));
-            if (ROCK_MESH_CACHE.size() >= 128) {
-                ROCK_MESH_CACHE.clear();
-            }
+            mesh = createRockMesh(new Random(meshSeed), sizeClass);
+            if (ROCK_MESH_CACHE.size() >= 128) ROCK_MESH_CACHE.clear();
             ROCK_MESH_CACHE.put(meshSeed, mesh);
         }
 
-        float lowestVertexY = 0.0F;
+        float boundingRadius = 0.0F;
         for (float[] vertex : mesh.vertices) {
-            lowestVertexY = Math.min(lowestVertexY, vertex[1]);
+            float radius = (float) Math.sqrt(
+                    vertex[0] * vertex[0] + vertex[1] * vertex[1] + vertex[2] * vertex[2]
+            );
+            boundingRadius = Math.max(boundingRadius, radius);
         }
-        float startY = anchor.y - lowestVertexY * scale + 0.025F;
+
+        // The whole mesh begins below the top face. Captured terrain occludes it
+        // until the rapid rise carries the fragment completely into open air.
+        float buriedExtent = boundingRadius * scale;
+        float startY = anchor.y + 1.0F - buriedExtent - 0.12F;
+        float emergenceHeight = buriedExtent * 2.0F + 0.24F;
 
         ROCKS.add(new Rock(
-                anchor.x + 0.5F,
-                startY,
-                anchor.z + 0.5F,
-                velocityX,
-                velocityY,
-                velocityZ,
-                scale,
-                random.nextInt(7),
+                anchor.x + 0.5F, startY, anchor.z + 0.5F,
+                driftX, driftZ, radialTravel, emergenceHeight,
+                scale, random.nextInt(3), emergenceTicks,
                 random.nextFloat() * 360.0F,
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.10F + random.nextFloat() * 0.18F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.07F + random.nextFloat() * 0.13F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.06F + random.nextFloat() * 0.12F),
                 (random.nextBoolean() ? 1.0F : -1.0F) * (0.06F + random.nextFloat() * 0.12F),
+                random.nextFloat() * (float) (Math.PI * 2.0D),
+                0.045F + random.nextFloat() * 0.035F,
                 mesh
         ));
         spawnRockParticles(anchor, random, scale);
@@ -559,11 +645,17 @@ public final class TimeEraseFractureEffect {
      * is independently displaced, so every triangle becomes a flat chipped
      * facet instead of a patch on a spherical surface.
      */
-    private static RockMesh createRockMesh(Random random) {
+    private static RockMesh createRockMesh(Random random, int sizeClass) {
         float halfX;
         float halfY;
         float halfZ;
-        int profile = random.nextInt(5);
+        int profile;
+        if (sizeClass == 0) {
+            int choice = random.nextInt(10);
+            profile = choice < 3 ? 0 : choice < 5 ? 2 : choice < 8 ? 4 : 5;
+        } else {
+            profile = random.nextInt(sizeClass == 1 ? 6 : 5);
+        }
 
         if (profile == 0) {
             // Thin stone plate.
@@ -585,11 +677,16 @@ public final class TimeEraseFractureEffect {
             halfX = 0.58F + random.nextFloat() * 0.20F;
             halfY = 0.54F + random.nextFloat() * 0.22F;
             halfZ = 0.58F + random.nextFloat() * 0.20F;
-        } else {
+        } else if (profile == 4) {
             // Thick wall slab, chipped along its narrow side.
             halfX = 0.70F + random.nextFloat() * 0.18F;
             halfY = 0.46F + random.nextFloat() * 0.18F;
             halfZ = 0.32F + random.nextFloat() * 0.16F;
+        } else {
+            // Long, flat concrete beam with a broken cross-section.
+            halfX = 1.02F + random.nextFloat() * 0.16F;
+            halfY = 0.24F + random.nextFloat() * 0.10F;
+            halfZ = 0.30F + random.nextFloat() * 0.12F;
         }
 
         float[][] vertices = new float[8][3];
@@ -662,9 +759,19 @@ public final class TimeEraseFractureEffect {
                     : (ROCK_LIFETIME_TICKS - age) / (float) ROCK_FADE_TICKS;
             int alphaByte = (int) (Math.max(0.0F, Math.min(1.0F, alpha)) * 255.0F);
 
-            double x = rock.x + rock.velocityX * age;
-            double y = rock.y + rock.velocityY * age;
-            double z = rock.z + rock.velocityZ * age;
+            float emergenceProgress = Math.max(0.0F, Math.min(1.0F,
+                    age / (float) Math.max(1, rock.emergenceTicks)));
+            float emergenceEase = 1.0F - (float) Math.pow(1.0F - emergenceProgress, 3.0D);
+            float driftProgress = Math.max(0.0F, Math.min(1.0F,
+                    (age - rock.emergenceTicks)
+                            / (float) Math.max(1, ROCK_LIFETIME_TICKS - rock.emergenceTicks)));
+            driftProgress = driftProgress * driftProgress * (3.0F - 2.0F * driftProgress);
+
+            double x = rock.x + rock.directionX * rock.radialTravel * driftProgress;
+            double y = rock.y + rock.emergenceHeight * emergenceEase
+                    + Math.sin(age * 0.11F + rock.hoverPhase) * rock.hoverAmplitude
+                    + driftProgress * 0.12F;
+            double z = rock.z + rock.directionZ * rock.radialTravel * driftProgress;
             if (!isInView(x, y, z, camera)) continue;
 
             poseStack.pushPose();
@@ -870,31 +977,39 @@ public final class TimeEraseFractureEffect {
 
     private static final class Rock {
         final float x, y, z;
-        final float velocityX, velocityY, velocityZ;
+        final float directionX, directionZ;
+        final float radialTravel, emergenceHeight;
         final float scale;
-        final int spawnDelay;
+        final int spawnDelay, emergenceTicks;
         final float yaw, pitch, yawSpeed, pitchSpeed, roll, rollSpeed;
+        final float hoverPhase, hoverAmplitude;
         final RockMesh mesh;
 
         Rock(float x, float y, float z,
-             float velocityX, float velocityY, float velocityZ,
-             float scale, int spawnDelay,
+             float directionX, float directionZ,
+             float radialTravel, float emergenceHeight,
+             float scale, int spawnDelay, int emergenceTicks,
              float yaw, float yawSpeed, float pitchSpeed,
-             float roll, float rollSpeed, RockMesh mesh) {
+             float roll, float rollSpeed,
+             float hoverPhase, float hoverAmplitude, RockMesh mesh) {
             this.x = x;
             this.y = y;
             this.z = z;
-            this.velocityX = velocityX;
-            this.velocityY = velocityY;
-            this.velocityZ = velocityZ;
+            this.directionX = directionX;
+            this.directionZ = directionZ;
+            this.radialTravel = radialTravel;
+            this.emergenceHeight = emergenceHeight;
             this.scale = scale;
             this.spawnDelay = spawnDelay;
+            this.emergenceTicks = emergenceTicks;
             this.yaw = yaw;
             this.pitch = (yaw * 0.17F) % 35.0F;
             this.yawSpeed = yawSpeed;
             this.pitchSpeed = pitchSpeed;
             this.roll = roll;
             this.rollSpeed = rollSpeed;
+            this.hoverPhase = hoverPhase;
+            this.hoverAmplitude = hoverAmplitude;
             this.mesh = mesh;
         }
     }

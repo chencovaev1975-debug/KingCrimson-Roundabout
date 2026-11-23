@@ -45,7 +45,7 @@ public final class TimeEraseFractureEffect {
     private static final int MAX_BLOCKS = 1600;
     private static final int[] BAND_CAPS = {130, 300, 470, 700};
     private static final int OBJECT_SCAN_ABOVE = 32;
-    private static final int OBJECT_SCAN_BELOW = 4;
+    private static final int OBJECT_SCAN_BELOW = 24;
 
     private static final int SHATTER_TICK = 46;
     private static final int CAMERA_SHAKE_END_TICK = 64;

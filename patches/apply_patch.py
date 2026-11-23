@@ -304,9 +304,11 @@ if "roundabout$renderTimeEraseSlash" not in hud_source:
     if close < 0:
         raise SystemExit("HUD slash injection: class closing brace not found")
     hud_inject = """
-    @Inject(method = "renderHotbar", at = @At("TAIL"))
-    private void roundabout$renderTimeEraseSlash(float partialTick, GuiGraphics graphics, CallbackInfo ci) {
-        TimeEraseSlashRenderer.render(graphics, partialTick, this.screenWidth, this.screenHeight);
+    @Inject(method = "render", at = @At("TAIL"))
+    private void roundabout$renderTimeEraseSlash(GuiGraphics graphics, float partialTick, CallbackInfo ci) {
+        if (this.minecraft.player != null) {
+            TimeEraseSlashRenderer.render(graphics, partialTick, this.screenWidth, this.screenHeight);
+        }
     }
 
 """

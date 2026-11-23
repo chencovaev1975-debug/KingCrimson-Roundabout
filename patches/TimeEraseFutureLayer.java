@@ -46,6 +46,7 @@ public final class TimeEraseFutureLayer<T extends LivingEntity, M extends Entity
         float localY = (float) -dy;
         float localZ = (float) (Math.sin(yaw) * dx - Math.cos(yaw) * dz);
 
+        float pulse = 0.97F + Mth.sin(ageInTicks * 0.16F) * 0.035F;
         poseStack.pushPose();
         try {
             poseStack.translate(localX, localY, localZ);
@@ -53,10 +54,10 @@ public final class TimeEraseFutureLayer<T extends LivingEntity, M extends Entity
             VertexConsumer halo = buffer.getBuffer(RenderType.entityTranslucentEmissive(WHITE_TEXTURE));
             poseStack.pushPose();
             try {
-                poseStack.scale(1.055F, 1.035F, 1.055F);
+                poseStack.scale(1.085F * pulse, 1.055F * pulse, 1.085F * pulse);
                 getParentModel().renderToBuffer(
                         poseStack, halo, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
-                        0.86F, 0.0F, 0.035F, 0.18F
+                        0.86F, 0.0F, 0.035F, 0.22F
                 );
             } finally {
                 poseStack.popPose();

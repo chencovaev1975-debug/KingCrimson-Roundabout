@@ -131,6 +131,7 @@ public final class TimeEraseFractureEffect {
     private static double centerX;
     private static double centerY;
     private static double centerZ;
+    private static float centerYawDegrees;
     private static float appliedCameraShake;
     private static SimpleSoundInstance themeInstance;
 
@@ -239,6 +240,7 @@ public final class TimeEraseFractureEffect {
         centerX = player.getX();
         centerY = player.getY();
         centerZ = player.getZ();
+        centerYawDegrees = player.getYRot();
 
         elapsedTicks = 0;
         effectStartNanos = System.nanoTime();
@@ -688,15 +690,69 @@ public final class TimeEraseFractureEffect {
         List<Float> primaryWidths = new ArrayList<>(primaryCount);
         List<Float> primaryLips = new ArrayList<>(primaryCount);
 
-        // The first fractures form an uneven radial skeleton, not a block-by-block web.
+        // Replace one of the radial arms with a clear forward-running Y fracture.
+        // Its trunk and both continuing arms use the same mesh builder, width,
+        // bevel and recessed-channel geometry as every other crack in build 147.
+        int forkedPrimary = random.nextInt(primaryCount);
         float angularOffset = random.nextFloat() * (float) (Math.PI * 2.0D);
         for (int i = 0; i < primaryCount; i++) {
+            float halfWidth = 0.052F + random.nextFloat() * 0.022F;
+            float lipHeight = 0.034F + random.nextFloat() * 0.024F;
+
+            if (i == forkedPrimary) {
+                // Minecraft yaw 0 faces +Z; adding 90 degrees converts that
+                // facing into the X/Z angle used by createWorldCrackBranch.
+                float forwardAngle = (float) Math.toRadians(centerYawDegrees)
+                        + (float) (Math.PI * 0.5D)
+                        + (random.nextFloat() - 0.5F) * 0.045F;
+
+                // A short, nearly straight trunk makes the upcoming split legible.
+                float trunkLength = 7.5F + random.nextFloat() * 1.8F;
+                List<CrackPoint> trunk = createWorldCrackBranch(
+                        impact, forwardAngle, trunkLength, 0.105F, random);
+                if (trunk.size() >= 2) {
+                    addWorldCrackPath(trunk, halfWidth, lipHeight, random);
+                    primaryPaths.add(trunk);
+                    primaryWidths.add(halfWidth);
+                    primaryLips.add(lipHeight);
+
+                    CrackPoint forkPoint = trunk.get(trunk.size() - 1);
+                    CrackPoint beforeFork = trunk.get(trunk.size() - 2);
+                    float trunkTangent = (float) Math.atan2(
+                            forkPoint.z - beforeFork.z,
+                            forkPoint.x - beforeFork.x);
+                    float splitAngle = 0.60F + random.nextFloat() * 0.16F;
+
+                    // Both arms leave the same junction and continue outward.
+                    // Mild independent angular noise keeps them rocky, not ruler-straight.
+                    float leftAngle = trunkTangent + splitAngle
+                            + (random.nextFloat() - 0.5F) * 0.10F;
+                    float rightAngle = trunkTangent - splitAngle
+                            + (random.nextFloat() - 0.5F) * 0.10F;
+                    float leftLength = 11.0F + random.nextFloat() * 4.2F;
+                    float rightLength = 11.0F + random.nextFloat() * 4.2F;
+
+                    List<CrackPoint> leftArm = createWorldCrackBranch(
+                            forkPoint, leftAngle, leftLength, 0.30F, random);
+                    List<CrackPoint> rightArm = createWorldCrackBranch(
+                            forkPoint, rightAngle, rightLength, 0.30F, random);
+
+                    if (leftArm.size() >= 2) {
+                        addWorldCrackPath(leftArm, halfWidth * 0.96F,
+                                lipHeight * 0.96F, random);
+                    }
+                    if (rightArm.size() >= 2) {
+                        addWorldCrackPath(rightArm, halfWidth * 0.96F,
+                                lipHeight * 0.96F, random);
+                    }
+                }
+                continue;
+            }
+
             float angle = angularOffset
                     + (float) (Math.PI * 2.0D * i / primaryCount)
                     + (random.nextFloat() - 0.5F) * 0.24F;
             float length = 20.0F + random.nextFloat() * 9.0F;
-            float halfWidth = 0.052F + random.nextFloat() * 0.022F;
-            float lipHeight = 0.034F + random.nextFloat() * 0.024F;
             List<CrackPoint> path = createWorldCrackBranch(
                     impact, angle, length, 0.24F, random);
             if (path.size() < 2) continue;
@@ -707,8 +763,8 @@ public final class TimeEraseFractureEffect {
             addWorldCrackPath(path, halfWidth, lipHeight, random);
         }
 
-        // Branches split from different points along each main fracture. Their
-        // angles, lengths and jaggedness vary, so the result never repeats as tiles.
+        // Keep the original secondary and fine branching system for the rest of
+        // the fracture network, preserving the build-147 density and irregularity.
         for (int pathIndex = 0; pathIndex < primaryPaths.size(); pathIndex++) {
             List<CrackPoint> parent = primaryPaths.get(pathIndex);
             if (parent.size() < 5) continue;

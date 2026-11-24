@@ -48,7 +48,8 @@ public final class TimeEraseSecondEffect {
     private static final double SLAB_LAUNCH_SECONDS = 2.78D;
     private static final double MAIN_AUDIO_DELAY_SECONDS = 3.55D;
     private static final double TRANSITION_SECONDS = 0.30D;
-    private static final int SLAB_COUNT = 20;
+    private static final int SLAB_COUNT = 13;
+    private static final double SLAB_DISSOLVE_SECONDS = 2.25D;
 
     private static final ResourceLocation FLAT_WHITE_TEXTURE =
             new ResourceLocation(Roundabout.MOD_ID, "textures/misc/flat_white.png");
@@ -225,33 +226,20 @@ public final class TimeEraseSecondEffect {
         return getTransitionProgress() >= 0.0F ? 1.0F : 0.0F;
     }
 
-    /** Multi-axis shake follows the branching impact and the instant the slabs erupt. */
+    /** Match the restrained single-axis shake of the original Time Erase. */
     public static void applyCameraShake(PoseStack poseStack, float partialTick) {
         cameraShakeX = cameraShakeY = cameraShakeZ = 0.0D;
         if (!active || startNanos == 0L) return;
 
         double t = elapsedSeconds() + partialTick / 20.0D;
-        if (t < 0.18D || t > 3.55D) return;
+        final double shatterStart = 2.30D;
+        final double shakeDuration = 0.90D;
+        if (t < shatterStart || t >= shatterStart + shakeDuration) return;
 
-        // Small tremors begin with the first forward fissure; the left/right
-        // split adds a stronger rumble, then the slab eruption creates the peak.
-        double firstCrack = t < 1.13D
-                ? Math.sin(t * 52.0D + 0.4D)
-                * 0.022D * (1.0D - smoothstep((t - 0.76D) / 0.37D))
-                : 0.0D;
-        double branchEnvelope = smoothstep((t - 1.13D) / 0.38D)
-                * (1.0D - smoothstep((t - 2.82D) / 0.60D));
-        double branchingRumble = Math.sin(t * 69.0D + 0.4D)
-                * 0.062D * branchEnvelope;
-        double eruptionEnvelope = t >= 2.72D
-                ? Math.exp(-(t - 2.72D) * 3.7D) : 0.0D;
-        double eruption = Math.sin(t * 83.0D + 1.1D) * 0.235D * eruptionEnvelope;
-        double amplitude = firstCrack + branchingRumble + eruption;
-
-        cameraShakeX = amplitude * Math.sin(t * 17.0D + 0.7D) * 0.70D;
-        cameraShakeY = amplitude * 1.08D;
-        cameraShakeZ = amplitude * Math.sin(t * 23.0D + 2.0D) * 0.32D;
-        poseStack.translate(cameraShakeX, cameraShakeY, cameraShakeZ);
+        double progress = (t - shatterStart) / shakeDuration;
+        double envelope = Math.pow(1.0D - progress, 1.35D);
+        cameraShakeY = Math.sin((t - shatterStart) * 43.0D) * 0.16D * envelope;
+        poseStack.translate(0.0D, cameraShakeY, 0.0D);
     }
 
     public static void removeCameraShake(PoseStack poseStack) {
@@ -279,28 +267,28 @@ public final class TimeEraseSecondEffect {
         double originZ = player.getZ();
 
         // Phase 1: one slow, deliberate fissure runs straight ahead.
-        double frontEndX = originX + forwardX * 8.2D;
-        double frontEndZ = originZ + forwardZ * 8.2D;
+        double frontEndX = originX + forwardX * 10.4D;
+        double frontEndZ = originZ + forwardZ * 10.4D;
         CrackBranch front = createJaggedGroundPath(level, random,
                 originX, originZ, frontEndX, frontEndZ,
-                8, 0.075D, 0.20D, 1.05D, 0.060F);
+                8, 0.075D, 0.20D, 1.05D, 0.120F);
         CRACKS.add(front);
 
         // Phase 2: only after the first line has travelled forward, it splits
         // into two long branches sweeping to the left and right.
         double splitX = originX + forwardX * 3.15D;
         double splitZ = originZ + forwardZ * 3.15D;
-        double leftEndX = splitX + leftX * 5.8D + forwardX * 1.6D;
-        double leftEndZ = splitZ + leftZ * 5.8D + forwardZ * 1.6D;
-        double rightEndX = splitX - leftX * 5.8D + forwardX * 1.6D;
-        double rightEndZ = splitZ - leftZ * 5.8D + forwardZ * 1.6D;
+        double leftEndX = splitX + leftX * 7.2D + forwardX * 2.0D;
+        double leftEndZ = splitZ + leftZ * 7.2D + forwardZ * 2.0D;
+        double rightEndX = splitX - leftX * 7.2D + forwardX * 2.0D;
+        double rightEndZ = splitZ - leftZ * 7.2D + forwardZ * 2.0D;
 
         CrackBranch left = createJaggedGroundPath(level, random,
                 splitX, splitZ, leftEndX, leftEndZ,
-                7, 0.20D, 1.13D, 0.88D, 0.058F);
+                7, 0.20D, 1.13D, 0.88D, 0.108F);
         CrackBranch right = createJaggedGroundPath(level, random,
                 splitX, splitZ, rightEndX, rightEndZ,
-                7, 0.20D, 1.13D, 0.88D, 0.058F);
+                7, 0.20D, 1.13D, 0.88D, 0.108F);
         CRACKS.add(left);
         CRACKS.add(right);
 
@@ -324,7 +312,7 @@ public final class TimeEraseSecondEffect {
                     branchStart.x + Math.cos(angle) * length,
                     branchStart.z + Math.sin(angle) * length,
                     3 + random.nextInt(3), 0.22D, 2.02D + random.nextDouble() * 0.42D,
-                    0.55D + random.nextDouble() * 0.28D, 0.040F);
+                    0.55D + random.nextDouble() * 0.28D, 0.074F);
             CRACKS.add(branch);
         }
     }
@@ -340,7 +328,7 @@ public final class TimeEraseSecondEffect {
                 start.x, start.z,
                 start.x + dx * length, start.z + dz * length,
                 4 + random.nextInt(2), 0.18D, startTime,
-                0.70D + random.nextDouble() * 0.32D, 0.044F));
+                0.70D + random.nextDouble() * 0.32D, 0.084F));
     }
 
     private static CrackBranch createJaggedGroundPath(ClientLevel level, Random random,
@@ -470,13 +458,13 @@ public final class TimeEraseSecondEffect {
 
         double perpendicularX = -dz / length;
         double perpendicularZ = dx / length;
-        double outer = width * 1.70D;
-        double floorHalfWidth = width * 0.30D;
+        double outer = width * 2.05D;
+        double floorHalfWidth = width * 0.43D;
 
         float topY0 = (float) (start.y - camera.y) + 0.004F;
         float topY1 = (float) (end.y - camera.y) + 0.004F;
-        float floorY0 = (float) (start.y - camera.y) - 0.052F;
-        float floorY1 = (float) (end.y - camera.y) - 0.052F;
+        float floorY0 = (float) (start.y - camera.y) - 0.170F;
+        float floorY1 = (float) (end.y - camera.y) - 0.170F;
         float lipY0 = (float) (start.y - camera.y) + 0.027F;
         float lipY1 = (float) (end.y - camera.y) + 0.027F;
 
@@ -580,32 +568,48 @@ public final class TimeEraseSecondEffect {
     private static void createSlabs() {
         SLABS.clear();
         Random random = new Random(startNanos ^ 0x4B435F534C414253L);
+
+        // Deliberately stagger the fragments in depth and height. Adjacent
+        // pieces alternate between a nearer and a farther orbit so their
+        // silhouettes keep real gaps instead of merging into one rock wall.
+        final double[] orbitRadii = {
+                7.2D, 11.0D, 7.4D, 11.2D, 7.3D, 11.3D, 7.5D,
+                11.0D, 7.1D, 11.2D, 7.4D, 11.1D, 10.9D
+        };
+        final double[] orbitHeights = {
+                0.2D, 4.2D, 8.1D, 0.5D, 4.4D, 8.4D, 0.3D,
+                4.1D, 8.2D, 0.6D, 4.3D, 8.3D, 4.5D
+        };
+
         for (int i = 0; i < SLAB_COUNT; i++) {
             double angle = Math.PI * 2.0D * i / SLAB_COUNT
-                    + (random.nextDouble() - 0.5D) * 0.16D;
-            double launchRadius = 2.0D + random.nextDouble() * 0.85D;
-            double launchX = centerX + Math.cos(angle) * launchRadius;
-            double launchZ = centerZ + Math.sin(angle) * launchRadius;
-            double orbitRadius = 4.6D + random.nextDouble() * 3.0D;
-            double orbitHeight = -0.65D + random.nextDouble() * 5.5D;
-            double orbitSpeed = (random.nextBoolean() ? 1.0D : -1.0D)
-                    * (1.15D + random.nextDouble() * 0.72D);
+                    + (random.nextDouble() - 0.5D) * 0.018D;
+            double orbitRadius = orbitRadii[i] + (random.nextDouble() - 0.5D) * 0.22D;
+            double launchRadius = orbitRadius;
+            double orbitHeight = orbitHeights[i] + (random.nextDouble() - 0.5D) * 0.30D;
+            // Almost identical angular velocity keeps the spacing stable while
+            // allowing a tiny natural variation from one fragment to another.
+            double orbitSpeed = 0.155D + (i % 3) * 0.003D;
 
-            int blockX = Mth.floor(launchX);
-            int blockZ = Mth.floor(launchZ);
+            int blockX = Mth.floor(centerX + Math.cos(angle) * launchRadius);
+            int blockZ = Mth.floor(centerZ + Math.sin(angle) * launchRadius);
             double groundY = capturedLevel.getHeight(
                     Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, blockX, blockZ);
+
+            float yawDirection = random.nextBoolean() ? 1.0F : -1.0F;
+            float pitchDirection = random.nextBoolean() ? 1.0F : -1.0F;
+            float rollDirection = random.nextBoolean() ? 1.0F : -1.0F;
 
             SLABS.add(new Slab(
                     angle, launchRadius, orbitRadius, orbitHeight, orbitSpeed,
                     groundY, random.nextDouble() * Math.PI * 2.0D,
-                    3.05F + random.nextFloat() * 0.62F,
+                    2.28F + random.nextFloat() * 0.28F,
                     random.nextFloat() * 360.0F,
                     random.nextFloat() * 360.0F,
                     random.nextFloat() * 360.0F,
-                    46.0F + random.nextFloat() * 62.0F,
-                    (random.nextBoolean() ? 1.0F : -1.0F) * (54.0F + random.nextFloat() * 70.0F),
-                    32.0F + random.nextFloat() * 85.0F,
+                    yawDirection * (1.5F + random.nextFloat() * 2.0F),
+                    pitchDirection * (0.9F + random.nextFloat() * 1.4F),
+                    rollDirection * (0.8F + random.nextFloat() * 1.2F),
                     createSlabMesh(random)
             ));
         }
@@ -615,7 +619,7 @@ public final class TimeEraseSecondEffect {
         int sides = 6 + random.nextInt(2);
         float halfX = 0.82F + random.nextFloat() * 0.20F;
         float halfZ = 0.82F + random.nextFloat() * 0.20F;
-        float halfY = 0.20F + random.nextFloat() * 0.14F;
+        float halfY = 0.30F + random.nextFloat() * 0.18F;
         float phase = random.nextFloat() * (float) (Math.PI * 2.0D);
         float ringTwist = (random.nextFloat() - 0.5F) * 0.13F;
         float leanX = (random.nextFloat() - 0.5F) * 0.10F;
@@ -718,23 +722,27 @@ public final class TimeEraseSecondEffect {
         Vec3 cameraPosition = camera.getPosition();
 
         double flightAge = Math.max(0.0D, elapsed - SLAB_LAUNCH_SECONDS);
-        float riseProgress = (float) smoothstep(flightAge / 0.72D);
-        double fade = 1.0D;
-        if (mainAudioStartNanos != 0L) {
-            double mainElapsed = (System.nanoTime() - mainAudioStartNanos) / 1_000_000_000.0D;
-            fade = 1.0D - smoothstep((mainElapsed - (MAIN_DURATION_NANOS / 1_000_000_000.0D - 0.34D)) / 0.34D);
-        }
-        int alpha = (int) (Mth.clamp((float) fade, 0.0F, 1.0F) * 255.0F);
+        float riseProgress = (float) smoothstep(flightAge / 0.90D);
+        double mainElapsed = mainAudioStartNanos == 0L ? 0.0D
+                : (System.nanoTime() - mainAudioStartNanos) / 1_000_000_000.0D;
+        double mainDuration = MAIN_DURATION_NANOS / 1_000_000_000.0D;
+        double disperse = mainAudioStartNanos == 0L ? 0.0D
+                : smoothstep((mainElapsed - (mainDuration - SLAB_DISSOLVE_SECONDS))
+                        / SLAB_DISSOLVE_SECONDS);
+        double fade = 1.0D - disperse;
+
 
         for (Slab slab : SLABS) {
             double angle = slab.angle + elapsed * slab.orbitSpeed;
             double radius = Mth.lerp(riseProgress, slab.launchRadius, slab.orbitRadius);
-            radius += Math.sin(elapsed * 3.0D + slab.hoverPhase) * 0.22D;
+            radius += Math.sin(flightAge * 0.78D + slab.hoverPhase) * 0.12D;
+            radius += disperse * (3.0D + (slab.hoverPhase % 1.0D) * 1.25D);
             double x = centerX + Math.cos(angle) * radius;
             double z = centerZ + Math.sin(angle) * radius;
             double targetY = centerY + slab.orbitHeight;
             double y = Mth.lerp(riseProgress, slab.groundY, targetY)
-                    + Math.sin(flightAge * 4.6D + slab.hoverPhase) * 0.20D;
+                    + Math.sin(flightAge * 0.72D + slab.hoverPhase) * 0.13D
+                    + disperse * (0.70D + (slab.hoverPhase % 1.0D) * 0.35D);
             if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) continue;
 
             poseStack.pushPose();

@@ -101,6 +101,8 @@ public final class TimeEraseFractureEffect {
     };
     private static final RenderType ROCK_RENDER_TYPE =
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
+    private static final RenderType ROCK_CRACK_RENDER_TYPE =
+            RenderType.entityTranslucent(new ResourceLocation("roundabout", "textures/misc/flat_white.png"));
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
@@ -1663,7 +1665,225 @@ public final class TimeEraseFractureEffect {
             faces[face++] = new int[] {upperCenter, topA, topB};
         }
 
-        return new RockMesh(vertices, faces);
+        RockCrack[] cracks = createRockCracks(random, vertices, faces, sizeClass);
+        return new RockMesh(vertices, faces, cracks);
+    }
+
+
+    /**
+     * A few large and medium stones carry their own branching surface fractures.
+     * Each branch is a narrow 3D ribbon laid into one planar facet of the rock.
+     */
+    private static RockCrack[] createRockCracks(Random random, float[][] vertices,
+                                                 int[][] faces, int sizeClass) {
+        float chance = sizeClass == 0 ? 0.42F : sizeClass == 1 ? 0.27F : 0.0F;
+        if (random.nextFloat() >= chance || faces.length == 0) return new RockCrack[0];
+
+        int selectedFace = random.nextInt(faces.length);
+        float bestArea = -1.0F;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            int candidate = random.nextInt(faces.length);
+            int[] face = faces[candidate];
+            float[] a = vertices[face[0]], b = vertices[face[1]], c = vertices[face[2]];
+            float ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+            float vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+            float cx = uy * vz - uz * vy;
+            float cy = uz * vx - ux * vz;
+            float cz = ux * vy - uy * vx;
+            float area = cx * cx + cy * cy + cz * cz;
+            if (area > bestArea) {
+                bestArea = area;
+                selectedFace = candidate;
+            }
+        }
+
+        int[] selected = faces[selectedFace];
+        float[] a = vertices[selected[0]], b = vertices[selected[1]], c = vertices[selected[2]];
+        float ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+        float vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+        float nx = uy * vz - uz * vy;
+        float ny = uz * vx - ux * vz;
+        float nz = ux * vy - uy * vx;
+        float normalLength = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (normalLength < 1.0E-5F) return new RockCrack[0];
+        nx /= normalLength;
+        ny /= normalLength;
+        nz /= normalLength;
+
+        float meshX = 0.0F, meshY = 0.0F, meshZ = 0.0F;
+        for (float[] vertex : vertices) {
+            meshX += vertex[0];
+            meshY += vertex[1];
+            meshZ += vertex[2];
+        }
+        meshX /= vertices.length;
+        meshY /= vertices.length;
+        meshZ /= vertices.length;
+        float faceX = (a[0] + b[0] + c[0]) / 3.0F - meshX;
+        float faceY = (a[1] + b[1] + c[1]) / 3.0F - meshY;
+        float faceZ = (a[2] + b[2] + c[2]) / 3.0F - meshZ;
+        if (nx * faceX + ny * faceY + nz * faceZ < 0.0F) {
+            float[] swap = b;
+            b = c;
+            c = swap;
+            nx = -nx;
+            ny = -ny;
+            nz = -nz;
+        }
+
+        List<RockCrack> cracks = new ArrayList<>(18);
+        float centerU = 0.29F + random.nextFloat() * 0.08F;
+        float centerV = 0.28F + random.nextFloat() * 0.08F;
+        if (centerU + centerV > 0.72F) centerV = 0.72F - centerU;
+        int firstEdge = random.nextInt(3);
+        int branches = 2 + random.nextInt(2);
+        for (int branch = 0; branch < branches; branch++) {
+            float startU = centerU + (random.nextFloat() - 0.5F) * 0.055F;
+            float startV = centerV + (random.nextFloat() - 0.5F) * 0.055F;
+            addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
+                    startU, startV, (firstEdge + branch) % 3,
+                    0.0055F + random.nextFloat() * 0.0030F);
+        }
+        return cracks.toArray(new RockCrack[0]);
+    }
+
+    private static void addRockCrackBranch(List<RockCrack> output, Random random,
+                                           float[] a, float[] b, float[] c,
+                                           float nx, float ny, float nz,
+                                           float startU, float startV, int edge, float width) {
+        float edgeT = 0.12F + random.nextFloat() * 0.76F;
+        float endU;
+        float endV;
+        if (edge == 0) {
+            endU = edgeT;
+            endV = 0.018F;
+        } else if (edge == 1) {
+            endU = 0.982F - edgeT;
+            endV = edgeT;
+        } else {
+            endU = 0.018F;
+            endV = edgeT;
+        }
+
+        int segments = 3 + random.nextInt(3);
+        float previousU = startU;
+        float previousV = startV;
+        for (int segment = 1; segment <= segments; segment++) {
+            float t = segment / (float) segments;
+            float jitter = segment == segments ? 0.0F
+                    : (random.nextFloat() - 0.5F) * 0.065F;
+            float u = startU + (endU - startU) * t + jitter;
+            float v = startV + (endV - startV) * t - jitter * 0.58F;
+            u = Math.max(0.018F, Math.min(0.964F, u));
+            v = Math.max(0.018F, Math.min(0.964F, v));
+            if (u + v > 0.982F) {
+                float scale = 0.982F / (u + v);
+                u *= scale;
+                v *= scale;
+            }
+
+            float[] start = rockTrianglePoint(a, b, c, previousU, previousV, nx, ny, nz);
+            float[] end = rockTrianglePoint(a, b, c, u, v, nx, ny, nz);
+            output.add(new RockCrack(start, end, nx, ny, nz, width));
+            previousU = u;
+            previousV = v;
+        }
+    }
+
+    private static float[] rockTrianglePoint(float[] a, float[] b, float[] c,
+                                             float u, float v, float nx, float ny, float nz) {
+        float w = 1.0F - u - v;
+        float inset = 0.0035F;
+        return new float[] {
+                a[0] * w + b[0] * u + c[0] * v + nx * inset,
+                a[1] * w + b[1] * u + c[1] * v + ny * inset,
+                a[2] * w + b[2] * u + c[2] * v + nz * inset
+        };
+    }
+
+    private static void emitRockCrack(VertexConsumer consumer, Matrix4f matrix,
+                                      org.joml.Matrix3f normalMatrix, RockCrack crack, int alpha) {
+        float dx = crack.end[0] - crack.start[0];
+        float dy = crack.end[1] - crack.start[1];
+        float dz = crack.end[2] - crack.start[2];
+        float px = dy * crack.nz - dz * crack.ny;
+        float py = dz * crack.nx - dx * crack.nz;
+        float pz = dx * crack.ny - dy * crack.nx;
+        float length = (float) Math.sqrt(px * px + py * py + pz * pz);
+        if (length < 1.0E-5F) return;
+        px /= length;
+        py /= length;
+        pz /= length;
+
+        // The charcoal bevel is slightly higher than the almost-black centre,
+        // making the crack read as a shallow groove rather than a painted line.
+        emitCrackRibbon(consumer, matrix, normalMatrix, crack,
+                crack.width * 2.65F, 48, 40, 35, alpha, px, py, pz, 0.0015F);
+        emitCrackRibbon(consumer, matrix, normalMatrix, crack,
+                crack.width * 0.78F, 10, 8, 8, Math.min(255, alpha + 22),
+                px, py, pz, 0.0028F);
+    }
+
+    private static void emitCrackRibbon(VertexConsumer consumer, Matrix4f matrix,
+                                        org.joml.Matrix3f normalMatrix, RockCrack crack,
+                                        float width, int red, int green, int blue, int alpha,
+                                        float px, float py, float pz, float normalOffset) {
+        float[] leftStart = new float[] {
+                crack.start[0] - px * width + crack.nx * normalOffset,
+                crack.start[1] - py * width + crack.ny * normalOffset,
+                crack.start[2] - pz * width + crack.nz * normalOffset
+        };
+        float[] rightStart = new float[] {
+                crack.start[0] + px * width + crack.nx * normalOffset,
+                crack.start[1] + py * width + crack.ny * normalOffset,
+                crack.start[2] + pz * width + crack.nz * normalOffset
+        };
+        float[] leftEnd = new float[] {
+                crack.end[0] - px * width + crack.nx * normalOffset,
+                crack.end[1] - py * width + crack.ny * normalOffset,
+                crack.end[2] - pz * width + crack.nz * normalOffset
+        };
+        float[] rightEnd = new float[] {
+                crack.end[0] + px * width + crack.nx * normalOffset,
+                crack.end[1] + py * width + crack.ny * normalOffset,
+                crack.end[2] + pz * width + crack.nz * normalOffset
+        };
+        emitCrackTriangle(consumer, matrix, normalMatrix,
+                leftStart, rightStart, rightEnd, red, green, blue, alpha,
+                crack.nx, crack.ny, crack.nz);
+        emitCrackTriangle(consumer, matrix, normalMatrix,
+                leftStart, rightEnd, leftEnd, red, green, blue, alpha,
+                crack.nx, crack.ny, crack.nz);
+    }
+
+    private static void emitCrackTriangle(VertexConsumer consumer, Matrix4f matrix,
+                                          org.joml.Matrix3f normalMatrix,
+                                          float[] a, float[] b, float[] c,
+                                          int red, int green, int blue, int alpha,
+                                          float nx, float ny, float nz) {
+        emitCrackVertex(consumer, matrix, normalMatrix, a, 0.0F, 0.0F,
+                red, green, blue, alpha, nx, ny, nz);
+        emitCrackVertex(consumer, matrix, normalMatrix, b, 1.0F, 0.0F,
+                red, green, blue, alpha, nx, ny, nz);
+        emitCrackVertex(consumer, matrix, normalMatrix, c, 1.0F, 1.0F,
+                red, green, blue, alpha, nx, ny, nz);
+        // entityTranslucent is a QUADS consumer; the repeated vertex completes
+        // this triangle without bleeding into the next triangle in the batch.
+        emitCrackVertex(consumer, matrix, normalMatrix, c, 1.0F, 1.0F,
+                red, green, blue, alpha, nx, ny, nz);
+    }
+
+    private static void emitCrackVertex(VertexConsumer consumer, Matrix4f matrix,
+                                        org.joml.Matrix3f normalMatrix, float[] point,
+                                        float u, float v, int red, int green, int blue,
+                                        int alpha, float nx, float ny, float nz) {
+        consumer.vertex(matrix, point[0], point[1], point[2])
+                .color(red, green, blue, alpha)
+                .uv(u, v)
+                .overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(LightTexture.FULL_BRIGHT)
+                .normal(normalMatrix, nx, ny, nz)
+                .endVertex();
     }
 
     private static void renderRocks(PoseStack poseStack,
@@ -1675,6 +1895,7 @@ public final class TimeEraseFractureEffect {
                 .getBlockModel(Blocks.STONE.defaultBlockState())
                 .getParticleIcon();
         VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
+        VertexConsumer crackConsumer = buffer.getBuffer(ROCK_CRACK_RENDER_TYPE);
 
         for (Rock rock : ROCKS) {
             float age = elapsedTicks + partialTick - SHATTER_TICK - rock.spawnDelay;
@@ -1767,13 +1988,18 @@ public final class TimeEraseFractureEffect {
                     emitRockTriangle(consumer, matrix, normalMatrix, stoneSprite,
                             a, b, c, color, alphaByte, nx, ny, nz);
                 }
+
+                for (RockCrack crack : rock.mesh.cracks) {
+                    emitRockCrack(crackConsumer, matrix, normalMatrix, crack, alphaByte);
+                }
             } finally {
                 poseStack.popPose();
             }
         }
 
-        // Flush only this render type; do not leave an unfinished vertex batch.
+        // Flush the opaque stone first, then its translucent crack grooves.
         buffer.endBatch(ROCK_RENDER_TYPE);
+        buffer.endBatch(ROCK_CRACK_RENDER_TYPE);
     }
 
     private static void emitRockTriangle(VertexConsumer consumer,
@@ -2212,13 +2438,31 @@ public final class TimeEraseFractureEffect {
         }
     }
 
+    private static final class RockCrack {
+        final float[] start;
+        final float[] end;
+        final float nx, ny, nz;
+        final float width;
+
+        RockCrack(float[] start, float[] end, float nx, float ny, float nz, float width) {
+            this.start = start;
+            this.end = end;
+            this.nx = nx;
+            this.ny = ny;
+            this.nz = nz;
+            this.width = width;
+        }
+    }
+
     private static final class RockMesh {
         final float[][] vertices;
         final int[][] faces;
+        final RockCrack[] cracks;
 
-        RockMesh(float[][] vertices, int[][] faces) {
+        RockMesh(float[][] vertices, int[][] faces, RockCrack[] cracks) {
             this.vertices = vertices;
             this.faces = faces;
+            this.cracks = cracks;
         }
     }
 

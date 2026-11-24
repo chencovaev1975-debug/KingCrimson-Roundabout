@@ -30,7 +30,6 @@ void main() {
     vec3 original = texture(DiffuseSampler, clamp(sampleUv, 0.001, 0.999)).rgb;
     vec3 tornColor = original;
     float totalMask = 0.0;
-    float magentaEnergy = 0.0;
     float violetEnergy = 0.0;
 
     // Broken horizontal strips with independently changing lengths, heights,
@@ -47,8 +46,8 @@ void main() {
         float maskY = smoothBand(abs(uv.y - center), halfHeight);
 
         float left = hash11(seed + 3.0) * 0.77;
-        float length = mix(0.15, 1.0 - left, hash11(seed + 4.0));
-        float right = min(1.0, left + length);
+        float segmentLength = mix(0.15, 1.0 - left, hash11(seed + 4.0));
+        float right = min(1.0, left + segmentLength);
         float segment = step(left, uv.x) * step(uv.x, right);
 
         // Some rows break into short separated fragments instead of a single bar.
@@ -80,7 +79,6 @@ void main() {
         tornColor = mix(tornColor, displaced, clamp(mask * 0.92, 0.0, 1.0));
         tornColor = mix(tornColor, tint, clamp(mask * (0.20 + 0.34 * tintChoice), 0.0, 0.68));
         totalMask = max(totalMask, mask);
-        magentaEnergy += mask * (0.25 + tintChoice * 0.48);
         violetEnergy += mask * (1.0 - tintChoice) * 0.38;
     }
 

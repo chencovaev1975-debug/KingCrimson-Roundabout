@@ -43,10 +43,10 @@ import java.util.Random;
  * collision, entity positions, or server state.
  */
 public final class TimeEraseSecondEffect {
-    private static final long MAIN_DURATION_NANOS = 14_884_014_000L;
+    private static final long MAIN_DURATION_NANOS = 14_884_063_000L;
 
     private static final double SLAB_LAUNCH_SECONDS = 2.78D;
-    private static final double MAIN_AUDIO_DELAY_SECONDS = 3.55D
+    private static final double MAIN_AUDIO_DELAY_SECONDS = 3.55D;
     private static final double TRANSITION_SECONDS = 0.30D;
     private static final int SLAB_COUNT = 20;
 

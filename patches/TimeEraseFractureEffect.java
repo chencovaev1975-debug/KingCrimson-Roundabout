@@ -124,6 +124,7 @@ public final class TimeEraseFractureEffect {
     private static boolean groundCracksCreated;
     private static boolean crackNetworkCreated;
     private static boolean worldAudioMuted;
+    private static boolean secondTimeEraseAudioIsolation;
     private static int groundCrackBuildIndex;
     private static int elapsedTicks;
     private static long effectStartNanos;
@@ -290,10 +291,12 @@ public final class TimeEraseFractureEffect {
      * with their original category volume folded into the sound instance itself.
      */
     public static void beginSecondTimeEraseAudioIsolation() {
+        secondTimeEraseAudioIsolation = true;
         muteWorldAudio();
     }
 
     public static void endSecondTimeEraseAudioIsolation() {
+        secondTimeEraseAudioIsolation = false;
         restoreWorldAudio();
     }
 
@@ -311,7 +314,7 @@ public final class TimeEraseFractureEffect {
 
     /** Restores category gains from the player's current audio settings. */
     private static void restoreWorldAudio() {
-        if (!worldAudioMuted) return;
+        if (secondTimeEraseAudioIsolation || !worldAudioMuted) return;
         Minecraft minecraft = Minecraft.getInstance();
         SoundManager soundManager = minecraft.getSoundManager();
         worldAudioMuted = false;

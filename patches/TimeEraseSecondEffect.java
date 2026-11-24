@@ -26,6 +26,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix3f;
@@ -474,6 +475,16 @@ public final class TimeEraseSecondEffect {
         double perpendicularZ = dx / length;
         double outer = width * 2.05D;
         double floorHalfWidth = width * 0.43D;
+        int packedLight = getCrackLight(start);
+
+        // Face normals follow each fractured wall instead of pretending that
+        // every surface is a flat horizontal decal.
+        float leftNX = (float) (perpendicularX * 0.65D);
+        float leftNY = 0.76F;
+        float leftNZ = (float) (perpendicularZ * 0.65D);
+        float rightNX = -leftNX;
+        float rightNY = leftNY;
+        float rightNZ = -leftNZ;
 
         float topY0 = (float) (start.y - camera.y) + 0.004F;
         float topY1 = (float) (end.y - camera.y) + 0.004F;
@@ -500,46 +511,56 @@ public final class TimeEraseSecondEffect {
         float rightFloorX1 = (float) (end.x - camera.x - perpendicularX * floorHalfWidth);
         float rightFloorZ1 = (float) (end.z - camera.z - perpendicularZ * floorHalfWidth);
 
-        // The two side walls slope down into a floor below the terrain surface.
+        // Left wall: a raised broken edge slopes into the recessed channel.
         emitGroundVertex(consumer, matrix, leftOuterX0, topY0, leftOuterZ0,
-                0.0F, 0.0F, 76, 66, 58, 225);
+                0.0F, 0.0F, 76, 66, 58, 225, packedLight, leftNX, leftNY, leftNZ);
         emitGroundVertex(consumer, matrix, leftFloorX0, floorY0, leftFloorZ0,
-                0.0F, 1.0F, 24, 20, 20, 240);
+                0.0F, 1.0F, 24, 20, 20, 240, packedLight, leftNX, leftNY, leftNZ);
         emitGroundVertex(consumer, matrix, leftFloorX1, floorY1, leftFloorZ1,
-                1.0F, 1.0F, 24, 20, 20, 240);
+                1.0F, 1.0F, 24, 20, 20, 240, packedLight, leftNX, leftNY, leftNZ);
         emitGroundVertex(consumer, matrix, leftOuterX1, topY1, leftOuterZ1,
-                1.0F, 0.0F, 76, 66, 58, 225);
+                1.0F, 0.0F, 76, 66, 58, 225, packedLight, leftNX, leftNY, leftNZ);
 
-        // Dark recessed centre. The negative height offset makes the groove
-        // visibly lower than the block top instead of a decal laid over it.
+        // Dark floor sits 17 cm below the surface and receives top-facing light.
         emitGroundVertex(consumer, matrix, leftFloorX0, floorY0, leftFloorZ0,
-                0.0F, 0.0F, 8, 7, 10, 250);
+                0.0F, 0.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
         emitGroundVertex(consumer, matrix, rightFloorX0, floorY0, rightFloorZ0,
-                1.0F, 0.0F, 8, 7, 10, 250);
+                1.0F, 0.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
         emitGroundVertex(consumer, matrix, rightFloorX1, floorY1, rightFloorZ1,
-                1.0F, 1.0F, 8, 7, 10, 250);
+                1.0F, 1.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
         emitGroundVertex(consumer, matrix, leftFloorX1, floorY1, leftFloorZ1,
-                0.0F, 1.0F, 8, 7, 10, 250);
+                0.0F, 1.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
 
+        // Right wall faces inward as a distinct slanted surface.
         emitGroundVertex(consumer, matrix, rightFloorX0, floorY0, rightFloorZ0,
-                0.0F, 0.0F, 24, 20, 20, 240);
+                0.0F, 0.0F, 24, 20, 20, 240, packedLight, rightNX, rightNY, rightNZ);
         emitGroundVertex(consumer, matrix, rightOuterX0, topY0, rightOuterZ0,
-                0.0F, 1.0F, 76, 66, 58, 225);
+                0.0F, 1.0F, 76, 66, 58, 225, packedLight, rightNX, rightNY, rightNZ);
         emitGroundVertex(consumer, matrix, rightOuterX1, topY1, rightOuterZ1,
-                1.0F, 1.0F, 76, 66, 58, 225);
+                1.0F, 1.0F, 76, 66, 58, 225, packedLight, rightNX, rightNY, rightNZ);
         emitGroundVertex(consumer, matrix, rightFloorX1, floorY1, rightFloorZ1,
-                1.0F, 0.0F, 24, 20, 20, 240);
+                1.0F, 0.0F, 24, 20, 20, 240, packedLight, rightNX, rightNY, rightNZ);
 
-        // A narrow uneven lip catches light on both fractured edges.
+        // A narrow uneven lip catches only the local light, not full-bright light.
         emitGroundLip(consumer, matrix, camera, start, end,
                 perpendicularX, perpendicularZ, outer * 0.95D,
-                (topY0 + topY1) * 0.5F + 0.023F, 132, 115, 100, 145);
+                (topY0 + topY1) * 0.5F + 0.023F, 132, 115, 100, 145,
+                packedLight);
+    }
+
+    private static int getCrackLight(Vec3 sample) {
+        if (capturedLevel == null) return LightTexture.FULL_BRIGHT;
+        BlockPos lightPos = BlockPos.containing(sample.x, sample.y, sample.z);
+        int blockLight = Math.max(4, capturedLevel.getBrightness(LightLayer.BLOCK, lightPos));
+        int skyLight = Math.max(6, capturedLevel.getBrightness(LightLayer.SKY, lightPos));
+        return LightTexture.pack(blockLight, skyLight);
     }
 
     private static void emitGroundQuad(VertexConsumer consumer, Matrix4f matrix, Vec3 camera,
                                        Vec3 start, Vec3 end, double px, double pz,
                                        double halfWidth, float yOffset,
-                                       int red, int green, int blue, int alpha) {
+                                       int red, int green, int blue, int alpha,
+                                       int packedLight, float normalX, float normalY, float normalZ) {
         float y0 = (float) (start.y - camera.y) + yOffset;
         float y1 = (float) (end.y - camera.y) + yOffset;
         float ax = (float) (start.x - camera.x - px * halfWidth);
@@ -550,32 +571,43 @@ public final class TimeEraseSecondEffect {
         float cz = (float) (end.z - camera.z + pz * halfWidth);
         float dx = (float) (end.x - camera.x - px * halfWidth);
         float dz = (float) (end.z - camera.z - pz * halfWidth);
-        emitGroundVertex(consumer, matrix, ax, y0, az, 0.0F, 0.0F, red, green, blue, alpha);
-        emitGroundVertex(consumer, matrix, bx, y0, bz, 1.0F, 0.0F, red, green, blue, alpha);
-        emitGroundVertex(consumer, matrix, cx, y1, cz, 1.0F, 1.0F, red, green, blue, alpha);
-        emitGroundVertex(consumer, matrix, dx, y1, dz, 0.0F, 1.0F, red, green, blue, alpha);
+        emitGroundVertex(consumer, matrix, ax, y0, az, 0.0F, 0.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
+        emitGroundVertex(consumer, matrix, bx, y0, bz, 1.0F, 0.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
+        emitGroundVertex(consumer, matrix, cx, y1, cz, 1.0F, 1.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
+        emitGroundVertex(consumer, matrix, dx, y1, dz, 0.0F, 1.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
     }
 
     private static void emitGroundLip(VertexConsumer consumer, Matrix4f matrix, Vec3 camera,
                                       Vec3 start, Vec3 end, double px, double pz,
                                       double halfWidth, float yOffset,
-                                      int red, int green, int blue, int alpha) {
+                                      int red, int green, int blue, int alpha,
+                                      int packedLight) {
         double thin = halfWidth * 0.16D;
+        float nx = (float) (px * 0.65D);
+        float ny = 0.76F;
+        float nz = (float) (pz * 0.65D);
         emitGroundQuad(consumer, matrix, camera, start, end,
-                px, pz, halfWidth, yOffset, red, green, blue, alpha);
+                px, pz, halfWidth, yOffset, red, green, blue, alpha,
+                packedLight, nx, ny, nz);
         emitGroundQuad(consumer, matrix, camera, start, end,
-                px, pz, thin, yOffset + 0.001F, red / 2, green / 2, blue / 2, alpha);
+                px, pz, thin, yOffset + 0.001F, red / 2, green / 2, blue / 2, alpha,
+                packedLight, nx, ny, nz);
     }
 
     private static void emitGroundVertex(VertexConsumer consumer, Matrix4f matrix,
                                          float x, float y, float z,
-                                         float u, float v, int red, int green, int blue, int alpha) {
+                                         float u, float v, int red, int green, int blue, int alpha,
+                                         int packedLight, float normalX, float normalY, float normalZ) {
         consumer.vertex(matrix, x, y, z)
                 .color(red, green, blue, alpha)
                 .uv(u, v)
                 .overlayCoords(OverlayTexture.NO_OVERLAY)
-                .uv2(LightTexture.FULL_BRIGHT)
-                .normal(0.0F, 1.0F, 0.0F)
+                .uv2(packedLight)
+                .normal(normalX, normalY, normalZ)
                 .endVertex();
     }
 

@@ -82,14 +82,6 @@ public final class TimeEraseFractureEffect {
     // Dissolve the captured terrain in the same short burst as the rocks launch.
     private static final int GROUND_DISSOLVE_TICKS = 4;
     private static final int ROCK_MAX_SPAWN_DELAY_TICKS = 2;
-    // Alternate B-triggered scene: 20 large slabs erupt at 2.75s, orbit until
-    // the supplied 14.884s main track ends, then clear during the closing cut.
-    private static final int SECOND_SHATTER_TICK = 55;
-    private static final int SECOND_ROCK_LIFETIME_TICKS = 304;
-    private static final int SECOND_ROCK_FADE_TICKS = 6;
-    private static final int SECOND_CRACK_START_TICK = 24;
-    private static final int SECOND_CRACK_GROW_TICKS = 31;
-    private static final int SECOND_CRACK_MESHES_PER_TICK = 580;
     private static final double SLASH_DELAY_SECONDS = 1.08D;
     private static final double SLASH_TRAVEL_SECONDS = 0.16D;
     private static final double SLASH_FADE_SECONDS = 0.06D;
@@ -136,10 +128,7 @@ public final class TimeEraseFractureEffect {
     private static int groundCrackBuildIndex;
     private static int elapsedTicks;
     private static long effectStartNanos;
-    private static boolean secondScene;
     private static ClientLevel capturedLevel;
-    private static float centerForwardX;
-    private static float centerForwardZ;
     private static double centerX;
     private static double centerY;
     private static double centerZ;
@@ -149,9 +138,6 @@ public final class TimeEraseFractureEffect {
     private TimeEraseFractureEffect() {}
 
     public static void tick(LocalPlayer player, boolean abilityActive) {
-        // The alternate B scene has its own monotonic timer. Do not let the
-        // ordinary King Crimson ability's inactive tick reset it or restore audio.
-        if (secondScene) return;
         if (player == null) {
             reset();
             return;
@@ -241,107 +227,6 @@ public final class TimeEraseFractureEffect {
         previousAbilityActive = abilityActive;
     }
 
-
-    /** Starts the alternate, entirely client-side B scene using the same safe block snapshot. */
-    public static void beginSecondScene(LocalPlayer player) {
-        if (player == null || !(player.level() instanceof ClientLevel level)) return;
-        reset();
-        secondScene = true;
-        beginSecondTimeEraseAudioIsolation();
-        begin(player, level);
-    }
-
-    /** Advances the B scene from wall-clock time, independently of the server ability timer. */
-    public static void tickSecondScene(double elapsedSeconds) {
-        if (!secondScene || !effectActive || capturedLevel == null) return;
-        int targetTick = Math.max(0, (int) Math.floor(elapsedSeconds * 20.0D));
-        if (targetTick <= elapsedTicks) return;
-
-        int captureTicks = (BAND_COUNT + CAPTURE_BANDS_PER_TICK - 1) / CAPTURE_BANDS_PER_TICK;
-        for (int tick = elapsedTicks + 1; tick <= targetTick; tick++) {
-            if (tick <= captureTicks) {
-                int firstBand = 1 + (tick - 1) * CAPTURE_BANDS_PER_TICK;
-                for (int offset = 0; offset < CAPTURE_BANDS_PER_TICK; offset++) {
-                    int band = firstBand + offset;
-                    if (band >= BAND_COUNT) break;
-                    captureBand(capturedLevel,
-                            (int) Math.floor(centerX),
-                            (int) Math.floor(centerY),
-                            (int) Math.floor(centerZ),
-                            band);
-                }
-            }
-        }
-        elapsedTicks = targetTick;
-
-        if (elapsedTicks >= captureTicks) {
-            if (!crackNetworkCreated) {
-                createWorldCrackNetwork();
-                crackNetworkCreated = true;
-            }
-            if (!groundCracksCreated) {
-                buildGroundCracksBatch(SECOND_CRACK_MESHES_PER_TICK);
-                if (groundCrackBuildIndex >= GROUND_ANCHORS.size()) {
-                    groundCracksCreated = true;
-                }
-            }
-        }
-
-        float crackGrowth = Math.max(0.0F, Math.min(1.0F,
-                (elapsedTicks - SECOND_CRACK_START_TICK)
-                        / (float) SECOND_CRACK_GROW_TICKS));
-        if (groundCracksCreated && elapsedTicks >= SECOND_CRACK_START_TICK
-                && crackGrowth < 1.0F) {
-            spawnSecondCrackSmoke(crackGrowth);
-        }
-
-        if (!rocksCreated && elapsedSeconds >= 2.75D) {
-            createRocks();
-            rocksCreated = true;
-        }
-    }
-
-    public static void endSecondScene() {
-        if (secondScene) {
-            endSecondTimeEraseAudioIsolation();
-            reset();
-        }
-    }
-
-    public static boolean isSecondSceneActive() {
-        return secondScene && effectActive;
-    }
-
-    public static boolean isSceneActive() {
-        return effectActive;
-    }
-
-    /** White puffs are emitted only at the moving fracture front, not randomly over the landscape. */
-    private static void spawnSecondCrackSmoke(float growth) {
-        if (!secondScene || capturedLevel == null || WORLD_CRACK_SEGMENTS.isEmpty()) return;
-        Random random = new Random((long) (growth * 100000.0F) ^ elapsedTicks * 0x9E3779B9L);
-        for (WorldCrackSegment segment : WORLD_CRACK_SEGMENTS) {
-            if (segment.revealOrder < growth - 0.032F
-                    || segment.revealOrder > growth + 0.018F) continue;
-            double x = (segment.startX + segment.endX) * 0.5D;
-            double z = (segment.startZ + segment.endZ) * 0.5D;
-            int blockX = (int) Math.floor(x);
-            int blockZ = (int) Math.floor(z);
-            int surfaceY = capturedLevel.getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
-            if (surfaceY <= capturedLevel.getMinBuildHeight()) continue;
-            int puffs = 1 + random.nextInt(2);
-            for (int i = 0; i < puffs; i++) {
-                double px = x + (random.nextDouble() - 0.5D) * 0.32D;
-                double pz = z + (random.nextDouble() - 0.5D) * 0.32D;
-                capturedLevel.addParticle(ParticleTypes.CLOUD,
-                        px, surfaceY + 0.08D, pz,
-                        (random.nextDouble() - 0.5D) * 0.025D,
-                        0.035D + random.nextDouble() * 0.045D,
-                        (random.nextDouble() - 0.5D) * 0.025D);
-            }
-        }
-    }
-
     private static void begin(LocalPlayer player, ClientLevel level) {
         stopTheme();
         BLOCKS.clear();
@@ -355,9 +240,6 @@ public final class TimeEraseFractureEffect {
         centerX = player.getX();
         centerY = player.getY();
         centerZ = player.getZ();
-        Vec3 forward = player.getViewVector(1.0F);
-        centerForwardX = (float) forward.x;
-        centerForwardZ = (float) forward.z;
 
         elapsedTicks = 0;
         effectStartNanos = System.nanoTime();
@@ -401,14 +283,11 @@ public final class TimeEraseFractureEffect {
         appliedCameraShake = 0.0F;
         FUTURE_PREDICTIONS.clear();
         FUTURE_PARTICLE_TIMES.clear();
-        secondScene = false;
     }
 
     /**
-     * Mutes every world audio category locally while preserving the user's
-     * configured slider values. Only live SoundManager category gains change.
-     * Allowed King Crimson sounds are re-routed through MASTER by the mixin,
-     * with their original category volume folded into the sound instance itself.
+     * The B scene has an independent audio-isolation lifetime. Normal Time Erase
+     * ticks may run alongside it but cannot restore the world categories early.
      */
     public static void beginSecondTimeEraseAudioIsolation() {
         secondTimeEraseAudioIsolation = true;
@@ -420,7 +299,13 @@ public final class TimeEraseFractureEffect {
         restoreWorldAudio();
     }
 
-    public static void muteWorldAudio() {
+    /**
+     * Mutes every world audio category locally while preserving the user's
+     * configured slider values. Only live SoundManager category gains change.
+     * Allowed King Crimson sounds are re-routed through MASTER by the mixin,
+     * with their original category volume folded into the sound instance itself.
+     */
+    private static void muteWorldAudio() {
         if (worldAudioMuted) return;
         Minecraft minecraft = Minecraft.getInstance();
         SoundManager soundManager = minecraft.getSoundManager();
@@ -729,20 +614,18 @@ public final class TimeEraseFractureEffect {
 
     public static void render(PoseStack poseStack, MultiBufferSource.BufferSource buffer,
                               Camera camera, float partialTick) {
-        if (!effectActive || (!ClientUtil.isUsingTimeErase && !secondScene)
-                || (!ClientUtil.renderTimeErase() && !secondScene)) return;
+        if (!effectActive || !ClientUtil.isUsingTimeErase || !ClientUtil.renderTimeErase()) return;
 
         View view = new View(camera);
-        int shatterTick = secondScene ? SECOND_SHATTER_TICK : SHATTER_TICK;
         float dissolveProgress = 0.0F;
-        if (elapsedTicks < shatterTick) {
+        if (elapsedTicks < SHATTER_TICK) {
             renderCapturedScene(poseStack, buffer, view, 0.0F);
             buffer.endBatch();
         } else {
             // The terrain begins its fast four-tick dissolve on the same frame
             // that the rock fragments emerge from the fractured surface.
             dissolveProgress = Math.max(0.0F, Math.min(1.0F,
-                    (elapsedTicks + partialTick - shatterTick) / (float) GROUND_DISSOLVE_TICKS));
+                    (elapsedTicks + partialTick - SHATTER_TICK) / (float) GROUND_DISSOLVE_TICKS));
             if (dissolveProgress < 1.0F) {
                 renderCapturedScene(poseStack, buffer, view, dissolveProgress);
                 buffer.endBatch();
@@ -751,11 +634,10 @@ public final class TimeEraseFractureEffect {
 
         // 3D fracture channels grow outward from the player from 1.60s to 2.30s.
         // During shatter, each crack disappears with the same terrain column.
-        int crackStartTick = secondScene ? SECOND_CRACK_START_TICK : CRACK_START_TICK;
-        if (groundCracksCreated && elapsedTicks >= crackStartTick) {
+        if (groundCracksCreated && elapsedTicks >= CRACK_START_TICK) {
             renderGroundCracks(poseStack, buffer, view, partialTick, dissolveProgress);
         }
-        if (elapsedTicks >= shatterTick && !ROCKS.isEmpty()) {
+        if (elapsedTicks >= SHATTER_TICK && !ROCKS.isEmpty()) {
             renderRocks(poseStack, buffer, view, partialTick);
         }
     }
@@ -814,10 +696,6 @@ public final class TimeEraseFractureEffect {
                 ^ ((long) Math.floor(centerZ) * 0xC2B2AE3D27D4EB4FL)
                 ^ 0x4B435F4943454352L;
         Random random = new Random(mixCrackSeed(seed));
-        if (secondScene) {
-            createSecondDirectionalCrackNetwork(random);
-            return;
-        }
         CrackPoint impact = new CrackPoint(
                 (float) centerX + (random.nextFloat() - 0.5F) * 0.22F,
                 (float) centerZ + (random.nextFloat() - 0.5F) * 0.22F
@@ -911,82 +789,6 @@ public final class TimeEraseFractureEffect {
         }
     }
 
-
-    /**
-     * The B scene has a deliberate fracture order: a slow line advances forward,
-     * splits left/right, then secondary and tertiary branches spread outward.
-     */
-    private static void createSecondDirectionalCrackNetwork(Random random) {
-        float forwardAngle = (float) Math.atan2(centerForwardZ, centerForwardX);
-        CrackPoint origin = new CrackPoint(
-                (float) centerX + centerForwardX * 0.28F,
-                (float) centerZ + centerForwardZ * 0.28F
-        );
-
-        List<CrackPoint> forward = createWorldCrackBranch(
-                origin, forwardAngle, 9.0F, 0.045F, random);
-        addWorldCrackPath(forward, 0.082F, 0.046F, random, 0.015F, 0.40F);
-        if (forward.size() < 3) return;
-
-        CrackPoint junction = forward.get(forward.size() - 1);
-        List<CrackPoint> left = createWorldCrackBranch(
-                junction, forwardAngle + (float) Math.PI * 0.5F
-                        + (random.nextFloat() - 0.5F) * 0.22F,
-                8.4F + random.nextFloat() * 2.2F, 0.22F, random);
-        List<CrackPoint> right = createWorldCrackBranch(
-                junction, forwardAngle - (float) Math.PI * 0.5F
-                        + (random.nextFloat() - 0.5F) * 0.22F,
-                8.4F + random.nextFloat() * 2.2F, 0.22F, random);
-        addWorldCrackPath(left, 0.070F, 0.041F, random, 0.405F, 0.715F);
-        addWorldCrackPath(right, 0.070F, 0.041F, random, 0.405F, 0.715F);
-
-        List<List<CrackPoint>> parents = new ArrayList<>(3);
-        parents.add(forward);
-        parents.add(left);
-        parents.add(right);
-        for (int parentIndex = 0; parentIndex < parents.size(); parentIndex++) {
-            List<CrackPoint> parent = parents.get(parentIndex);
-            if (parent.size() < 4) continue;
-            int branchCount = parentIndex == 0 ? 3 : 3 + random.nextInt(2);
-            for (int branchIndex = 0; branchIndex < branchCount; branchIndex++) {
-                int pivotIndex = 1 + random.nextInt(parent.size() - 2);
-                CrackPoint previous = parent.get(pivotIndex - 1);
-                CrackPoint pivot = parent.get(pivotIndex);
-                float tangent = (float) Math.atan2(
-                        pivot.z - previous.z, pivot.x - previous.x);
-                float side = random.nextBoolean() ? 1.0F : -1.0F;
-                float angle = tangent + side * (0.54F + random.nextFloat() * 0.92F);
-                float length = 3.6F + random.nextFloat() * 5.8F;
-                List<CrackPoint> branch = createWorldCrackBranch(
-                        pivot, angle, length, 0.40F, random);
-                float revealStart = 0.70F + random.nextFloat() * 0.10F;
-                float revealEnd = Math.min(0.995F, revealStart + 0.16F + random.nextFloat() * 0.08F);
-                addWorldCrackPath(branch,
-                        0.043F + random.nextFloat() * 0.012F,
-                        0.026F + random.nextFloat() * 0.010F,
-                        random, revealStart, revealEnd);
-
-                if (branch.size() >= 4 && random.nextFloat() < 0.58F) {
-                    int forkIndex = 1 + random.nextInt(branch.size() - 2);
-                    CrackPoint forkPrevious = branch.get(forkIndex - 1);
-                    CrackPoint fork = branch.get(forkIndex);
-                    float forkTangent = (float) Math.atan2(
-                            fork.z - forkPrevious.z, fork.x - forkPrevious.x);
-                    float forkAngle = forkTangent
-                            + (random.nextBoolean() ? 1.0F : -1.0F)
-                            * (0.62F + random.nextFloat() * 0.68F);
-                    List<CrackPoint> fineFork = createWorldCrackBranch(
-                            fork, forkAngle, 2.4F + random.nextFloat() * 3.5F,
-                            0.52F, random);
-                    addWorldCrackPath(fineFork,
-                            0.026F + random.nextFloat() * 0.010F,
-                            0.018F + random.nextFloat() * 0.008F,
-                            random, Math.min(0.94F, revealStart + 0.08F), 1.0F);
-                }
-            }
-        }
-    }
-
     /**
      * Extends one jagged fracture in short, irregular steps. The small direction
      * changes create sharp bends while the overall direction remains coherent.
@@ -1042,30 +844,17 @@ public final class TimeEraseFractureEffect {
                                           float halfWidth,
                                           float lipHeight,
                                           Random random) {
-        addWorldCrackPath(points, halfWidth, lipHeight, random, -1.0F, -1.0F);
-    }
-
-    private static void addWorldCrackPath(List<CrackPoint> points,
-                                          float halfWidth,
-                                          float lipHeight,
-                                          Random random,
-                                          float revealStart,
-                                          float revealEnd) {
-        int segmentCount = Math.max(1, points.size() - 1);
         for (int i = 0; i < points.size() - 1; i++) {
             CrackPoint start = points.get(i);
             CrackPoint end = points.get(i + 1);
             float dx = end.x - start.x;
             float dz = end.z - start.z;
             if (dx * dx + dz * dz < 0.012F) continue;
-            float revealOrder = revealStart < 0.0F ? -1.0F
-                    : revealStart + (revealEnd - revealStart)
-                    * ((i + 0.5F) / (float) segmentCount);
             WORLD_CRACK_SEGMENTS.add(new WorldCrackSegment(
                     start.x, start.z, end.x, end.z,
                     halfWidth * (0.84F + random.nextFloat() * 0.32F),
                     lipHeight * (0.78F + random.nextFloat() * 0.40F),
-                    random.nextLong(), revealOrder
+                    random.nextLong()
             ));
         }
     }
@@ -1147,8 +936,7 @@ public final class TimeEraseFractureEffect {
         List<CrackPoint> clippedPoints = new ArrayList<>(2);
         clippedPoints.add(new CrackPoint(startX, startZ));
         clippedPoints.add(new CrackPoint(endX, endZ));
-        return new CrackPath(clippedPoints, segment.halfWidth, segment.lipHeight,
-                segment.revealOrder);
+        return new CrackPath(clippedPoints, segment.halfWidth, segment.lipHeight);
     }
 
     private static boolean clipCrackBoundary(double p, double q, double[] interval) {
@@ -1333,10 +1121,7 @@ public final class TimeEraseFractureEffect {
                     end.x - normalX * widthB, 1.0F + lipB,
                     end.z - normalZ * widthB);
 
-            float revealLeft = secondScene && path.revealOrder >= 0.0F
-                    ? Math.max(0.0F, Math.min(1.0F,
-                    path.revealOrder + (random.nextFloat() - 0.5F) * 0.014F))
-                    : crackQuadReveal(record, start, end, random);
+            float revealLeft = crackQuadReveal(record, start, end, random);
             float revealFloor = Math.min(1.0F, revealLeft + random.nextFloat() * 0.025F);
             float revealRight = Math.min(1.0F, revealLeft + random.nextFloat() * 0.025F);
             int bevelColor = 104 + random.nextInt(45);
@@ -1377,11 +1162,9 @@ public final class TimeEraseFractureEffect {
                                            MultiBufferSource.BufferSource buffer,
                                            View camera, float partialTick,
                                            float dissolveProgress) {
-        int crackStart = secondScene ? SECOND_CRACK_START_TICK : CRACK_START_TICK;
-        int crackDuration = secondScene ? SECOND_CRACK_GROW_TICKS : CRACK_GROW_TICKS;
         float growth = Math.max(0.0F, Math.min(1.0F,
-                (elapsedTicks + partialTick - crackStart) / (float) crackDuration));
-        if (growth <= 0.0F && elapsedTicks < crackStart) return;
+                (elapsedTicks + partialTick - CRACK_START_TICK) / (float) CRACK_GROW_TICKS));
+        if (growth <= 0.0F && elapsedTicks < CRACK_START_TICK) return;
 
         VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
         for (GroundCrack crack : GROUND_CRACKS) {
@@ -1486,21 +1269,6 @@ public final class TimeEraseFractureEffect {
         List<BlockRecord> usedAnchors = new ArrayList<>(
                 BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT + SMALL_ROCK_COUNT
         );
-        if (secondScene) {
-            // Twenty comparably massive slabs, distributed around the full ring.
-            for (int i = 0; i < 20; i++) {
-                BlockRecord anchor = pickAnchorWithReuse(
-                        random, usedAnchors, 1.30D, 3.8D, 9.6D);
-                if (anchor == null) break;
-                usedAnchors.add(anchor);
-                addRock(anchor, random,
-                        2.72F + random.nextFloat() * 0.34F,
-                        4.6F + random.nextFloat() * 3.2F,
-                        7, 0);
-            }
-            spawnTerrainDissolveParticles(random);
-            return;
-        }
         List<BlockRecord> primaryAnchors = new ArrayList<>(BIG_ROCK_COUNT + MEDIUM_ROCK_COUNT);
 
         // The medium ring is deliberately selected first so it owns the closest
@@ -1913,7 +1681,7 @@ public final class TimeEraseFractureEffect {
             faces[face++] = new int[] {upperCenter, topA, topB};
         }
 
-        RockCrackGeometry damage = createRockSurfaceCracks(random, vertices, faces, sizeClass);
+        RockDentGeometry damage = createHammerDamage(random, vertices, faces, sizeClass);
         return new RockMesh(damage.vertices, damage.faces, damage.cracks);
     }
 
@@ -1927,26 +1695,21 @@ public final class TimeEraseFractureEffect {
      * The struck triangle is removed and rebuilt as concentric 3D rings, so the
      * crater is part of the rock mesh itself rather than a decal on its surface.
      */
-    /**
-     * Selected large and medium fragments receive an irregular branching crack
-     * network on one broad facet. The original polyhedron is preserved:
-     * no circular punch marks, crater rings, or round depressions are generated.
-     */
-    private static RockCrackGeometry createRockSurfaceCracks(Random random,
-                                                              float[][] vertices,
-                                                              int[][] faces,
-                                                              int sizeClass) {
+    private static RockDentGeometry createHammerDamage(Random random, float[][] vertices,
+                                                         int[][] faces, int sizeClass) {
         float chance = sizeClass == 0 ? 0.46F : sizeClass == 1 ? 0.29F : 0.0F;
         if (random.nextFloat() >= chance || faces.length == 0) {
-            return new RockCrackGeometry(vertices, faces, new RockCrack[0]);
+            return new RockDentGeometry(vertices, faces, new RockCrack[0]);
         }
 
-        int selectedFace = random.nextInt(faces.length);
+        int selectedFace = 0;
         float bestArea = -1.0F;
         for (int attempt = 0; attempt < 18; attempt++) {
             int candidate = random.nextInt(faces.length);
             int[] face = faces[candidate];
-            float[] a = vertices[face[0]], b = vertices[face[1]], c = vertices[face[2]];
+            float[] a = vertices[face[0]];
+            float[] b = vertices[face[1]];
+            float[] c = vertices[face[2]];
             float area = rockTriangleAreaSquared(a, b, c);
             if (area > bestArea) {
                 bestArea = area;
@@ -1954,8 +1717,10 @@ public final class TimeEraseFractureEffect {
             }
         }
 
-        int[] face = faces[selectedFace];
-        float[] a = vertices[face[0]], b = vertices[face[1]], c = vertices[face[2]];
+        int[] struckFace = faces[selectedFace];
+        float[] a = vertices[struckFace[0]];
+        float[] b = vertices[struckFace[1]];
+        float[] c = vertices[struckFace[2]];
         float ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
         float vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
         float nx = uy * vz - uz * vy;
@@ -1963,7 +1728,7 @@ public final class TimeEraseFractureEffect {
         float nz = ux * vy - uy * vx;
         float normalLength = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (normalLength < 1.0E-5F) {
-            return new RockCrackGeometry(vertices, faces, new RockCrack[0]);
+            return new RockDentGeometry(vertices, faces, new RockCrack[0]);
         }
         nx /= normalLength;
         ny /= normalLength;
@@ -1987,36 +1752,97 @@ public final class TimeEraseFractureEffect {
             nz = -nz;
         }
 
-        List<RockCrack> cracks = new ArrayList<>(28);
-        float originU = 0.22F + random.nextFloat() * 0.22F;
-        float originV = 0.18F + random.nextFloat() * 0.24F;
-        if (originU + originV > 0.78F) originV = 0.78F - originU;
-
-        int firstEdge = random.nextInt(3);
-        int primaryBranches = 3 + random.nextInt(2);
-        for (int branch = 0; branch < primaryBranches; branch++) {
-            float branchU = originU + (random.nextFloat() - 0.5F) * 0.075F;
-            float branchV = originV + (random.nextFloat() - 0.5F) * 0.075F;
-            branchU = Math.max(0.045F, Math.min(0.91F, branchU));
-            branchV = Math.max(0.045F, Math.min(0.91F - branchU, branchV));
-
-            addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
-                    branchU, branchV, (firstEdge + branch) % 3,
-                    0.0055F + random.nextFloat() * 0.0030F);
-
-            if ((branch & 1) == 0) {
-                float forkU = originU * 0.58F + branchU * 0.42F
-                        + (random.nextFloat() - 0.5F) * 0.065F;
-                float forkV = originV * 0.58F + branchV * 0.42F
-                        + (random.nextFloat() - 0.5F) * 0.065F;
-                forkU = Math.max(0.04F, Math.min(0.90F, forkU));
-                forkV = Math.max(0.04F, Math.min(0.90F - forkU, forkV));
-                addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
-                        forkU, forkV, (firstEdge + branch + 2) % 3,
-                        0.0038F + random.nextFloat() * 0.0022F);
+        List<float[]> damagedVertices = new ArrayList<>(vertices.length + 49);
+        damagedVertices.addAll(Arrays.asList(vertices));
+        List<int[]> damagedFaces = new ArrayList<>(faces.length + 72);
+        for (int faceIndex = 0; faceIndex < faces.length; faceIndex++) {
+            if (faceIndex != selectedFace) {
+                damagedFaces.add(faces[faceIndex]);
             }
         }
-        return new RockCrackGeometry(vertices, faces, cracks.toArray(new RockCrack[0]));
+
+        final int ringSegments = 12;
+        int[] perimeter = new int[ringSegments];
+        int[] lip = new int[ringSegments];
+        int[] bevel = new int[ringSegments];
+        int[] basin = new int[ringSegments];
+
+        // Twelve points subdivide the old triangle boundary without changing
+        // its silhouette. Their positions remain exactly on the original edges.
+        for (int i = 0; i < ringSegments; i++) {
+            int edge = i / 4;
+            float t = (i % 4) * 0.25F;
+            float wa, wb, wc;
+            if (edge == 0) {
+                wa = 1.0F - t; wb = t; wc = 0.0F;
+            } else if (edge == 1) {
+                wa = 0.0F; wb = 1.0F - t; wc = t;
+            } else {
+                wa = t; wb = 0.0F; wc = 1.0F - t;
+            }
+            perimeter[i] = damagedVertices.size();
+            damagedVertices.add(rockBarycentricPoint(a, b, c, wa, wb, wc, nx, ny, nz, 0.0F));
+        }
+
+        float craterRadius = 0.198F + random.nextFloat() * 0.018F;
+        for (int i = 0; i < ringSegments; i++) {
+            float angle = (float) (Math.PI * 2.0D * i / ringSegments);
+            float cos = (float) Math.cos(angle);
+            float sin = (float) Math.sin(angle);
+            float irregular = 0.92F + random.nextFloat() * 0.16F;
+            float wa = 1.0F / 3.0F + cos * craterRadius * irregular;
+            float wb = 1.0F / 3.0F + sin * craterRadius * irregular;
+            float wc = 1.0F - wa - wb;
+
+            // Hammered lip: uneven raised chips around the perimeter.
+            float lipLift = 0.004F + random.nextFloat() * 0.012F;
+            if (i % 4 == 0) lipLift += 0.008F + random.nextFloat() * 0.010F;
+            lip[i] = damagedVertices.size();
+            damagedVertices.add(rockBarycentricPoint(a, b, c, wa, wb, wc,
+                    nx, ny, nz, lipLift));
+
+            float innerWa = 1.0F / 3.0F + cos * craterRadius * 0.69F;
+            float innerWb = 1.0F / 3.0F + sin * craterRadius * 0.69F;
+            bevel[i] = damagedVertices.size();
+            damagedVertices.add(rockBarycentricPoint(a, b, c, innerWa, innerWb,
+                    1.0F - innerWa - innerWb, nx, ny, nz,
+                    -0.043F - random.nextFloat() * 0.018F));
+
+            float floorWa = 1.0F / 3.0F + cos * craterRadius * 0.31F;
+            float floorWb = 1.0F / 3.0F + sin * craterRadius * 0.31F;
+            basin[i] = damagedVertices.size();
+            damagedVertices.add(rockBarycentricPoint(a, b, c, floorWa, floorWb,
+                    1.0F - floorWa - floorWb, nx, ny, nz,
+                    -0.092F - random.nextFloat() * 0.024F));
+        }
+
+        int craterCenter = damagedVertices.size();
+        damagedVertices.add(rockBarycentricPoint(a, b, c,
+                1.0F / 3.0F, 1.0F / 3.0F, 1.0F / 3.0F,
+                nx, ny, nz, -0.135F - random.nextFloat() * 0.025F));
+
+        for (int i = 0; i < ringSegments; i++) {
+            int next = (i + 1) % ringSegments;
+
+            // Unstruck surface tapering into the raised impact lip.
+            damagedFaces.add(new int[] {perimeter[i], perimeter[next], lip[next]});
+            damagedFaces.add(new int[] {perimeter[i], lip[next], lip[i]});
+
+            // Chipped rim rolls down into a steep, visibly concave bevel.
+            damagedFaces.add(new int[] {lip[i], lip[next], bevel[next]});
+            damagedFaces.add(new int[] {lip[i], bevel[next], bevel[i]});
+
+            // The inner basin is deeper and flatter, like stone pushed inward.
+            damagedFaces.add(new int[] {bevel[i], bevel[next], basin[next]});
+            damagedFaces.add(new int[] {bevel[i], basin[next], basin[i]});
+            damagedFaces.add(new int[] {basin[i], basin[next], craterCenter});
+        }
+
+        RockCrack[] cracks = createHammerCracks(random, a, b, c, nx, ny, nz, craterRadius);
+        return new RockDentGeometry(
+                damagedVertices.toArray(new float[0][]),
+                damagedFaces.toArray(new int[0][]),
+                cracks);
     }
 
     private static float rockTriangleAreaSquared(float[] a, float[] b, float[] c) {
@@ -2026,6 +1852,43 @@ public final class TimeEraseFractureEffect {
         float ny = uz * vx - ux * vz;
         float nz = ux * vy - uy * vx;
         return nx * nx + ny * ny + nz * nz;
+    }
+
+    private static float[] rockBarycentricPoint(float[] a, float[] b, float[] c,
+                                                float wa, float wb, float wc,
+                                                float nx, float ny, float nz,
+                                                float normalOffset) {
+        return new float[] {
+                a[0] * wa + b[0] * wb + c[0] * wc + nx * normalOffset,
+                a[1] * wa + b[1] * wb + c[1] * wc + ny * normalOffset,
+                a[2] * wa + b[2] * wb + c[2] * wc + nz * normalOffset
+        };
+    }
+
+    /**
+     * Fractures radiate from the struck lip and split toward the edges of the
+     * same face, tying the dark grooves to the actual 3D dent.
+     */
+    private static RockCrack[] createHammerCracks(Random random,
+                                                   float[] a, float[] b, float[] c,
+                                                   float nx, float ny, float nz,
+                                                   float craterRadius) {
+        List<RockCrack> cracks = new ArrayList<>(22);
+        int branches = 3 + random.nextInt(2);
+        int firstEdge = random.nextInt(3);
+        for (int branch = 0; branch < branches; branch++) {
+            float angle = (float) (Math.PI * 2.0D * branch / branches)
+                    + (random.nextFloat() - 0.5F) * 0.42F;
+            float radius = craterRadius * (0.88F + random.nextFloat() * 0.12F);
+            float wa = 1.0F / 3.0F + (float) Math.cos(angle) * radius;
+            float wb = 1.0F / 3.0F + (float) Math.sin(angle) * radius;
+            float startU = wb;
+            float startV = 1.0F - wa - wb;
+            addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
+                    startU, startV, (firstEdge + branch) % 3,
+                    0.0048F + random.nextFloat() * 0.0024F);
+        }
+        return cracks.toArray(new RockCrack[0]);
     }
 
     // Shared barycentric point helper for the branching grooves cut into each selected rock face.
@@ -2100,9 +1963,8 @@ public final class TimeEraseFractureEffect {
         py /= length;
         pz /= length;
 
-        // A wider charcoal bevel and a narrow black core create a shallow groove.
-        // Chipped lip, sloping dark bevel, then an inset core: the fissure is a
-        // shallow 3D trench with an uneven raised edge, not a painted black line.
+        // An uneven raised chip lip, sloping bevel and deep black core form
+        // a visible 3D groove along selected large/medium fragments.
         emitRockCrackRibbon(consumer, matrix, normalMatrix, sprite, crack,
                 crack.width * 2.70F, 76, alpha, px, py, pz, 0.0040F);
         emitRockCrackRibbon(consumer, matrix, normalMatrix, sprite, crack,
@@ -2155,70 +2017,35 @@ public final class TimeEraseFractureEffect {
         VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
 
         for (Rock rock : ROCKS) {
-            float shatterTick = secondScene ? SECOND_SHATTER_TICK : SHATTER_TICK;
-            int lifetimeTicks = secondScene ? SECOND_ROCK_LIFETIME_TICKS : ROCK_LIFETIME_TICKS;
-            int fadeTicks = secondScene ? SECOND_ROCK_FADE_TICKS : ROCK_FADE_TICKS;
-            float age = elapsedTicks + partialTick - shatterTick - rock.spawnDelay;
-            if (age < 0.0F || age >= lifetimeTicks) continue;
+            float age = elapsedTicks + partialTick - SHATTER_TICK - rock.spawnDelay;
+            if (age < 0.0F || age >= ROCK_LIFETIME_TICKS) continue;
 
-            float fadeStart = lifetimeTicks - fadeTicks;
+            float fadeStart = ROCK_LIFETIME_TICKS - ROCK_FADE_TICKS;
             float alpha = age <= fadeStart ? 1.0F
-                    : (lifetimeTicks - age) / (float) fadeTicks;
+                    : (ROCK_LIFETIME_TICKS - age) / (float) ROCK_FADE_TICKS;
             int alphaByte = (int) (Math.max(0.0F, Math.min(1.0F, alpha)) * 255.0F);
 
-            double x;
-            double y;
-            double z;
-            float rotationYaw;
-            float rotationPitch;
-            float rotationRoll;
-            if (secondScene) {
-                float launchProgress = Math.max(0.0F, Math.min(1.0F, age / 8.0F));
-                float launchEase = 1.0F - (float) Math.pow(1.0F - launchProgress, 3.0D);
-                double initialDx = rock.x - centerX;
-                double initialDz = rock.z - centerZ;
-                double initialAngle = Math.atan2(initialDz, initialDx);
-                double spinDirection = rock.yawSpeed >= 0.0F ? 1.0D : -1.0D;
-                double orbitAngle = initialAngle + age * 0.092D * spinDirection;
-                double orbitRadius = 5.4D + rock.radialTravel * 0.48D;
-                double orbitX = centerX + Math.cos(orbitAngle) * orbitRadius;
-                double orbitZ = centerZ + Math.sin(orbitAngle) * orbitRadius;
-                double orbitY = centerY + 1.65D
-                        + Math.sin(age * 0.16D + rock.hoverPhase) * 1.35D
-                        + Math.sin(age * 0.047D + rock.hoverPhase * 1.7D) * 0.42D;
-                double emergenceY = rock.y + rock.emergenceHeight * launchEase;
-                x = rock.x + (orbitX - rock.x) * launchEase;
-                z = rock.z + (orbitZ - rock.z) * launchEase;
-                y = emergenceY + (orbitY - emergenceY) * launchEase;
-                rotationYaw = rock.yaw + (float) (age * spinDirection * 7.8D);
-                rotationPitch = rock.pitch + age * 5.6F;
-                rotationRoll = rock.roll - (float) (age * spinDirection * 6.3D);
-            } else {
-                float emergenceProgress = Math.max(0.0F, Math.min(1.0F,
-                        age / (float) Math.max(1, rock.emergenceTicks)));
-                float emergenceEase = 1.0F - (float) Math.pow(1.0F - emergenceProgress, 3.0D);
-                float driftProgress = Math.max(0.0F, Math.min(1.0F,
-                        (age - rock.emergenceTicks)
-                                / (float) Math.max(1, lifetimeTicks - rock.emergenceTicks)));
-                driftProgress = driftProgress * driftProgress * (3.0F - 2.0F * driftProgress);
+            float emergenceProgress = Math.max(0.0F, Math.min(1.0F,
+                    age / (float) Math.max(1, rock.emergenceTicks)));
+            float emergenceEase = 1.0F - (float) Math.pow(1.0F - emergenceProgress, 3.0D);
+            float driftProgress = Math.max(0.0F, Math.min(1.0F,
+                    (age - rock.emergenceTicks)
+                            / (float) Math.max(1, ROCK_LIFETIME_TICKS - rock.emergenceTicks)));
+            driftProgress = driftProgress * driftProgress * (3.0F - 2.0F * driftProgress);
 
-                x = rock.x + rock.directionX * rock.radialTravel * driftProgress;
-                y = rock.y + rock.emergenceHeight * emergenceEase
-                        + Math.sin(age * 0.11F + rock.hoverPhase) * rock.hoverAmplitude
-                        + driftProgress * 0.12F;
-                z = rock.z + rock.directionZ * rock.radialTravel * driftProgress;
-                rotationYaw = rock.yaw + age * rock.yawSpeed;
-                rotationPitch = rock.pitch + age * rock.pitchSpeed;
-                rotationRoll = rock.roll + age * rock.rollSpeed;
-            }
-            if (!secondScene && !isInView(x, y, z, camera)) continue;
+            double x = rock.x + rock.directionX * rock.radialTravel * driftProgress;
+            double y = rock.y + rock.emergenceHeight * emergenceEase
+                    + Math.sin(age * 0.11F + rock.hoverPhase) * rock.hoverAmplitude
+                    + driftProgress * 0.12F;
+            double z = rock.z + rock.directionZ * rock.radialTravel * driftProgress;
+            if (!isInView(x, y, z, camera)) continue;
 
             poseStack.pushPose();
             try {
                 poseStack.translate(x - camera.x, y - camera.y, z - camera.z);
-                poseStack.mulPose(Axis.YP.rotationDegrees(rotationYaw));
-                poseStack.mulPose(Axis.XP.rotationDegrees(rotationPitch));
-                poseStack.mulPose(Axis.ZP.rotationDegrees(rotationRoll));
+                poseStack.mulPose(Axis.YP.rotationDegrees(rock.yaw + age * rock.yawSpeed));
+                poseStack.mulPose(Axis.XP.rotationDegrees(rock.pitch + age * rock.pitchSpeed));
+                poseStack.mulPose(Axis.ZP.rotationDegrees(rock.roll + age * rock.rollSpeed));
                 poseStack.scale(rock.scale, rock.scale, rock.scale);
 
                 Matrix4f matrix = poseStack.last().pose();
@@ -2534,18 +2361,6 @@ public final class TimeEraseFractureEffect {
 
     private static float cameraShake(float partialTick) {
         if (!effectActive) return 0.0F;
-        if (secondScene) {
-            double seconds = TimeEraseSecondEffect.getElapsedSeconds();
-            if (seconds < 0.92D || seconds > 3.48D) return 0.0F;
-            double crackEnvelope = Math.max(0.0D, Math.min(1.0D, (seconds - 0.92D) / 1.25D));
-            float spreadingShake = (float) Math.sin(seconds * 43.0D)
-                    * (float) (0.018D + crackEnvelope * 0.035D);
-            double burstAge = seconds - 2.72D;
-            float burst = burstAge < 0.0D ? 0.0F
-                    : (float) Math.sin(burstAge * 58.0D)
-                    * (float) (0.205D * Math.exp(-burstAge * 2.25D));
-            return spreadingShake + burst;
-        }
         float t = elapsedTicks + partialTick;
         if (t < SHATTER_TICK || t >= CAMERA_SHAKE_END_TICK) return 0.0F;
         float progress = (t - SHATTER_TICK)
@@ -2628,10 +2443,9 @@ public final class TimeEraseFractureEffect {
         final float halfWidth;
         final float lipHeight;
         final long seed;
-        final float revealOrder;
 
         WorldCrackSegment(float startX, float startZ, float endX, float endZ,
-                          float halfWidth, float lipHeight, long seed, float revealOrder) {
+                          float halfWidth, float lipHeight, long seed) {
             this.startX = startX;
             this.startZ = startZ;
             this.endX = endX;
@@ -2639,7 +2453,6 @@ public final class TimeEraseFractureEffect {
             this.halfWidth = halfWidth;
             this.lipHeight = lipHeight;
             this.seed = seed;
-            this.revealOrder = revealOrder;
         }
     }
 
@@ -2657,17 +2470,11 @@ public final class TimeEraseFractureEffect {
         final List<CrackPoint> points;
         final float halfWidth;
         final float lipHeight;
-        final float revealOrder;
 
         CrackPath(List<CrackPoint> points, float halfWidth, float lipHeight) {
-            this(points, halfWidth, lipHeight, -1.0F);
-        }
-
-        CrackPath(List<CrackPoint> points, float halfWidth, float lipHeight, float revealOrder) {
             this.points = points;
             this.halfWidth = halfWidth;
             this.lipHeight = lipHeight;
-            this.revealOrder = revealOrder;
         }
     }
 
@@ -2749,12 +2556,12 @@ public final class TimeEraseFractureEffect {
         }
     }
 
-    private static final class RockCrackGeometry {
+    private static final class RockDentGeometry {
         final float[][] vertices;
         final int[][] faces;
         final RockCrack[] cracks;
 
-        RockCrackGeometry(float[][] vertices, int[][] faces, RockCrack[] cracks) {
+        RockDentGeometry(float[][] vertices, int[][] faces, RockCrack[] cracks) {
             this.vertices = vertices;
             this.faces = faces;
             this.cracks = cracks;

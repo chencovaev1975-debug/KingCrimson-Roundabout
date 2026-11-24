@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 root = Path(".")
@@ -646,9 +647,21 @@ audio_targets = {
 }
 for source_name, target_name in audio_targets.items():
     audio_source = assets_dir / source_name
-    if not audio_source.exists():
+    if audio_source.exists():
+        audio_bytes = audio_source.read_bytes()
+    elif source_name.startswith("time_erase_second_"):
+        # Keep binary Ogg payloads as small ordered base64 text chunks in git.
+        # Reassemble them here on the runner before the Gradle resource build.
+        audio_parts = sorted(assets_dir.glob(f"{source_name}.b64.*"))
+        if not audio_parts:
+            raise SystemExit(f"Missing audio resource and base64 parts: patches/assets/{source_name}")
+        encoded_audio = "".join(part.read_text(encoding="ascii").strip() for part in audio_parts)
+        try:
+            audio_bytes = base64.b64decode(encoded_audio, validate=True)
+        except Exception as exc:
+            raise SystemExit(f"Invalid base64 audio payload for {source_name}: {exc}")
+    else:
         raise SystemExit(f"Missing audio resource: patches/assets/{source_name}")
-    audio_bytes = audio_source.read_bytes()
     if not audio_bytes.startswith(b"OggS"):
         raise SystemExit(f"Audio resource is not a valid Ogg container: {source_name}")
     audio_target = root / "common/src/main/resources/assets/roundabout/sounds" / target_name

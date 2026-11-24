@@ -410,13 +410,13 @@ post_shader_registry = root / "common/src/main/java/net/zetalasis/client/shader/
 update_source_once(
     post_shader_registry,
     "    public static IPostChainAccessor D4C_DIM_MERGE_LEAVE = null;",
-    "    public static IPostChainAccessor D4C_DIM_MERGE_LEAVE = null;\\n    public static IPostChainAccessor TIME_ERASE_GLITCH = null;",
+    "    public static IPostChainAccessor D4C_DIM_MERGE_LEAVE = null;\n    public static IPostChainAccessor TIME_ERASE_GLITCH = null;",
     "declare second Time Erase glitch post-chain"
 )
 update_source_once(
     post_shader_registry,
     "        D4C_DIM_MERGE_LEAVE = register(\"d4cdimmerge_leave\");",
-    "        D4C_DIM_MERGE_LEAVE = register(\"d4cdimmerge_leave\");\\n        TIME_ERASE_GLITCH = register(\"time_erase_glitch\");",
+    "        D4C_DIM_MERGE_LEAVE = register(\"d4cdimmerge_leave\");\n        TIME_ERASE_GLITCH = register(\"time_erase_glitch\");",
     "register second Time Erase glitch post-chain"
 )
 
@@ -424,7 +424,7 @@ shader_game_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/shad
 update_source_once(
     shader_game_renderer,
     "import net.hydra.jojomod.client.ClientUtil;",
-    "import net.hydra.jojomod.client.ClientUtil;\\nimport net.hydra.jojomod.client.TimeEraseSecondEffect;",
+    "import net.hydra.jojomod.client.ClientUtil;\nimport net.hydra.jojomod.client.TimeEraseSecondEffect;",
     "import second Time Erase transition state"
 )
 update_source_once(

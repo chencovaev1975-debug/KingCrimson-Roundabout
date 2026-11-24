@@ -1873,6 +1873,7 @@ public final class TimeEraseFractureEffect {
         return cracks.toArray(new RockCrack[0]);
     }
 
+    // Shared barycentric point helper for the branching grooves cut into each selected rock face.
     private static float[] rockTrianglePoint(float[] a, float[] b, float[] c,
                                              float u, float v, float nx, float ny, float nz) {
         float w = 1.0F - u - v;

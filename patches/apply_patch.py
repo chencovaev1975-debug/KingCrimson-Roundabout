@@ -120,6 +120,7 @@ fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding=
 addon_files = {
     "TimeEraseSlashRenderer.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSlashRenderer.java",
     "TimeEraseFutureLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseFutureLayer.java",
+    "TimeEraseAuraLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseAuraLayer.java",
 }
 for filename, target in addon_files.items():
     source = Path(__file__).with_name(filename)
@@ -324,7 +325,8 @@ update_source_once(
     living_renderer,
     "import net.hydra.jojomod.client.models.layers.FrozenLayer;",
     """import net.hydra.jojomod.client.models.layers.FrozenLayer;
-import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;""",
+import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;
+import net.hydra.jojomod.client.models.layers.TimeEraseAuraLayer;""",
     "import the Time Erase future render layer without the player aura"
 )
 def insert_line_after_unique(path, marker, line_to_insert, label):
@@ -339,7 +341,13 @@ insert_line_after_unique(
     living_renderer,
     "this.addLayer(new FrozenLayer<>",
     "        this.addLayer(new TimeEraseFutureLayer<>(this));",
-    "attach only the future hologram to living renderers"
+    "attach the future hologram to living renderers"
+)
+insert_line_after_unique(
+    living_renderer,
+    "this.addLayer(new TimeEraseFutureLayer<>(this));",
+    "        this.addLayer(new TimeEraseAuraLayer<>(this));",
+    "attach procedural King Crimson fire aura to living renderers"
 )
 
 update_source_once(

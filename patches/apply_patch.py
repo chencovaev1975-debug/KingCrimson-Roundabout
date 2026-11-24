@@ -318,8 +318,8 @@ if "roundabout$filterTimeEraseDelayedSound" not in sound_mixin_source:
         encoding="utf-8"
     )
 
-# Attach only the red future-image layer. The activating player's flame aura is
-# intentionally not registered; StandEntity targets are filtered in its predictor.
+# Attach the red future-image layer and procedural King Crimson fire aura.
+# Each layer filters itself to the local target so other players are unaffected.
 living_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/ZLivingEntityRenderer.java"
 update_source_once(
     living_renderer,
@@ -327,7 +327,7 @@ update_source_once(
     """import net.hydra.jojomod.client.models.layers.FrozenLayer;
 import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;
 import net.hydra.jojomod.client.models.layers.TimeEraseAuraLayer;""",
-    "import the Time Erase future render layer without the player aura"
+    "import the Time Erase future-image and procedural aura layers"
 )
 def insert_line_after_unique(path, marker, line_to_insert, label):
     lines = path.read_text(encoding="utf-8").splitlines()

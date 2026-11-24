@@ -14,6 +14,21 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
 
+def replace_in_inject_method(path: Path, method_name: str, old: str, new: str, label: str) -> None:
+    source = path.read_text(encoding="utf-8")
+    method_start = source.find("private void " + method_name)
+    if method_start < 0:
+        raise SystemExit(f"{label}: method {method_name} not found")
+    next_inject = source.find("@Inject", method_start + 1)
+    method_end = next_inject if next_inject >= 0 else len(source)
+    section = source[method_start:method_end]
+    count = section.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected one match in {method_name}, found {count}")
+    section = section.replace(old, new, 1)
+    path.write_text(source[:method_start] + section + source[method_end:], encoding="utf-8")
+
+
 # Disable Roundabout's stock floating terrain fragments. The custom fracture pass
 # below renders selected world blocks and its own non-rotating stone chips locally.
 replace_once(
@@ -265,39 +280,40 @@ replace_once(
         }""",
     "hide ordinary chunks after the B-scene ground eruption"
 )
-replace_once(
+replace_in_inject_method(
     renderer,
-    """    private void roundabout$renderClouds(PoseStack $0, Matrix4f $1, float $2, double $3, double $4, double $5, CallbackInfo ci) {
-        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {""",
-    """    private void roundabout$renderClouds(PoseStack $0, Matrix4f $1, float $2, double $3, double $4, double $5, CallbackInfo ci) {
-        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ() || TimeEraseSecondEffect.isActive()) {""",
+    "roundabout$renderClouds",
+    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
+    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ() || TimeEraseSecondEffect.isActive()) {",
     "hide ordinary clouds during the B-scene cosmic sky"
 )
-replace_once(
+
+replace_in_inject_method(
     renderer,
-    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
-        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {""",
-    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
-        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ() || TimeEraseSecondEffect.isActive()) {""",
+    "roundabout$renderEndSky",
+    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
+    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ() || TimeEraseSecondEffect.isActive()) {",
     "hide vanilla End sky for the B-scene transition"
 )
-replace_once(
+
+replace_in_inject_method(
     renderer,
-    "        if (ClientUtil.renderTimeErase()) {\n            if (!$4) {",
-    "        if (ClientUtil.renderTimeErase() || TimeEraseSecondEffect.isActive()) {\n            if (!$4) {",
+    "roundabout$renderSky",
+    "if (ClientUtil.renderTimeErase()) {",
+    "if (ClientUtil.renderTimeErase() || TimeEraseSecondEffect.isActive()) {",
     "render native six-face cosmic skybox during the B-scene"
 )
+
 replace_once(
     renderer,
-    """                    float alpha = (float) ClientUtil.renderTimeEraseTime();
-                    float dblcheck = $2 % 1;
-                    if (ClientUtil.isUsingTimeErase) {
-                        alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);
-                    } else {
-                        alpha = Math.max(alpha - dblcheck, 0);
-                    }
-                    alpha /= (float) ClientUtil.fadeTime;
-                    alpha = Mth.clamp(alpha, 0, 1F);""",
+    replace_in_inject_method(
+    renderer,
+    "roundabout$renderSky",
+    "                    float alpha = (float) ClientUtil.renderTimeEraseTime();\n                    float dblcheck = $2 % 1;\n                    if (ClientUtil.isUsingTimeErase) {\n                        alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);\n                    } else {\n                        alpha = Math.max(alpha - dblcheck, 0);\n                    }\n                    alpha /= (float) ClientUtil.fadeTime;\n                    alpha = Mth.clamp(alpha, 0, 1F);",
+    "                    float alpha;\n                    if (TimeEraseSecondEffect.isActive()) {\n                        alpha = TimeEraseSecondEffect.getSkyAlpha($2);\n                    } else {\n                        alpha = (float) ClientUtil.renderTimeEraseTime();\n                        float dblcheck = $2 % 1;\n                        if (ClientUtil.isUsingTimeErase) {\n                            alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);\n                        } else {\n                            alpha = Math.max(alpha - dblcheck, 0);\n                        }\n                        alpha /= (float) ClientUtil.fadeTime;\n                        alpha = Mth.clamp(alpha, 0, 1F);\n                    }",
+    "fade B-scene cosmic skybox with its native transition"
+)
+
     """                    float alpha;
                     if (TimeEraseSecondEffect.isActive()) {
                         alpha = TimeEraseSecondEffect.getSkyAlpha($2);

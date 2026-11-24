@@ -247,6 +247,7 @@ public final class TimeEraseFractureEffect {
         if (player == null || !(player.level() instanceof ClientLevel level)) return;
         reset();
         secondScene = true;
+        beginSecondTimeEraseAudioIsolation();
         begin(player, level);
     }
 
@@ -301,7 +302,10 @@ public final class TimeEraseFractureEffect {
     }
 
     public static void endSecondScene() {
-        if (secondScene) reset();
+        if (secondScene) {
+            endSecondTimeEraseAudioIsolation();
+            reset();
+        }
     }
 
     public static boolean isSecondSceneActive() {
@@ -376,6 +380,7 @@ public final class TimeEraseFractureEffect {
 
     public static void reset() {
         stopTheme();
+        secondTimeEraseAudioIsolation = false;
         restoreWorldAudio();
         BLOCKS.clear();
         GROUND_ANCHORS.clear();
@@ -1376,7 +1381,7 @@ public final class TimeEraseFractureEffect {
         int crackDuration = secondScene ? SECOND_CRACK_GROW_TICKS : CRACK_GROW_TICKS;
         float growth = Math.max(0.0F, Math.min(1.0F,
                 (elapsedTicks + partialTick - crackStart) / (float) crackDuration));
-        if (growth <= 0.0F && elapsedTicks < CRACK_START_TICK) return;
+        if (growth <= 0.0F && elapsedTicks < crackStart) return;
 
         VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
         for (GroundCrack crack : GROUND_CRACKS) {

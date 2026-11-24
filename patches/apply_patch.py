@@ -120,6 +120,7 @@ fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding=
 addon_files = {
     "TimeEraseSlashRenderer.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSlashRenderer.java",
     "TimeEraseFutureLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseFutureLayer.java",
+    "TimeEraseSecondEffect.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSecondEffect.java",
 }
 for filename, target in addon_files.items():
     source = Path(__file__).with_name(filename)
@@ -212,11 +213,17 @@ if "import net.hydra.jojomod.client.TimeEraseFractureEffect;" not in renderer.re
     if source.count(marker) != 1:
         raise SystemExit("import TimeEraseFractureEffect: expected one ClientUtil import")
     renderer.write_text(source.replace(marker, marker + "\nimport net.hydra.jojomod.client.TimeEraseFractureEffect;", 1), encoding="utf-8")
+if "import net.hydra.jojomod.client.TimeEraseSecondEffect;" not in renderer.read_text(encoding="utf-8"):
+    source = renderer.read_text(encoding="utf-8")
+    marker = "import net.hydra.jojomod.client.TimeEraseFractureEffect;"
+    if source.count(marker) != 1:
+        raise SystemExit("import TimeEraseSecondEffect: expected one fracture-effect import")
+    renderer.write_text(source.replace(marker, marker + "\\nimport net.hydra.jojomod.client.TimeEraseSecondEffect;", 1), encoding="utf-8")
 
 replace_once(
     renderer,
     "        buffer.endBatch();",
-    "        TimeEraseFractureEffect.render($$0, buffer, $$3, $$2);\n\n        buffer.endBatch();",
+    "        TimeEraseFractureEffect.render($$0, buffer, $$3, $$2);\n        TimeEraseSecondEffect.render($$0, buffer, $$3, $$2);\n\n        buffer.endBatch();",
     "render local Time Erase block fractures and stone chips"
 )
 
@@ -228,7 +235,7 @@ replace_once(
 
         roundabout$renderAnubisMemory($$1);""",
     """        ClientUtil.mirrorCycles = 0;
-        TimeEraseFractureEffect.applyCameraShake($$0, $$1);
+        TimeEraseFractureEffect.applyCameraShake($$0, $$1);\n        TimeEraseSecondEffect.applyCameraShake($$0, $$1);
 
         roundabout$renderAnubisMemory($$1);""",
     "apply vertical Time Erase camera shake"
@@ -239,7 +246,7 @@ replace_once(
 
     }""",
     """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
-        TimeEraseFractureEffect.removeCameraShake($$0);
+        TimeEraseFractureEffect.removeCameraShake($$0);\n        TimeEraseSecondEffect.removeCameraShake($$0);
 
     }""",
     "restore render pose after Time Erase camera shake"

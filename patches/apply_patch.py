@@ -304,22 +304,24 @@ replace_in_inject_method(
     "render native six-face cosmic skybox during the B-scene"
 )
 
-replace_once(
-    renderer,
-    replace_in_inject_method(
+replace_in_inject_method(
     renderer,
     "roundabout$renderSky",
-    "                    float alpha = (float) ClientUtil.renderTimeEraseTime();\n                    float dblcheck = $2 % 1;\n                    if (ClientUtil.isUsingTimeErase) {\n                        alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);\n                    } else {\n                        alpha = Math.max(alpha - dblcheck, 0);\n                    }\n                    alpha /= (float) ClientUtil.fadeTime;\n                    alpha = Mth.clamp(alpha, 0, 1F);",
-    "                    float alpha;\n                    if (TimeEraseSecondEffect.isActive()) {\n                        alpha = TimeEraseSecondEffect.getSkyAlpha($2);\n                    } else {\n                        alpha = (float) ClientUtil.renderTimeEraseTime();\n                        float dblcheck = $2 % 1;\n                        if (ClientUtil.isUsingTimeErase) {\n                            alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);\n                        } else {\n                            alpha = Math.max(alpha - dblcheck, 0);\n                        }\n                        alpha /= (float) ClientUtil.fadeTime;\n                        alpha = Mth.clamp(alpha, 0, 1F);\n                    }",
-    "fade B-scene cosmic skybox with its native transition"
-)
-
+    """                    float alpha = (float) ClientUtil.renderTimeEraseTime();
+                    float dblcheck = $$2 % 1;
+                    if (ClientUtil.isUsingTimeErase) {
+                        alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);
+                    } else {
+                        alpha = Math.max(alpha - dblcheck, 0);
+                    }
+                    alpha /= (float) ClientUtil.fadeTime;
+                    alpha = Mth.clamp(alpha, 0, 1F);""",
     """                    float alpha;
                     if (TimeEraseSecondEffect.isActive()) {
-                        alpha = TimeEraseSecondEffect.getSkyAlpha($2);
+                        alpha = TimeEraseSecondEffect.getSkyAlpha($$2);
                     } else {
                         alpha = (float) ClientUtil.renderTimeEraseTime();
-                        float dblcheck = $2 % 1;
+                        float dblcheck = $$2 % 1;
                         if (ClientUtil.isUsingTimeErase) {
                             alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);
                         } else {

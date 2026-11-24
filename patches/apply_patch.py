@@ -649,17 +649,22 @@ for source_name, target_name in audio_targets.items():
     audio_source = assets_dir / source_name
     if audio_source.exists():
         audio_bytes = audio_source.read_bytes()
-    elif source_name.startswith("time_erase_second_"):
-        # Keep binary Ogg payloads as small ordered base64 text chunks in git.
-        # Reassemble them here on the runner before the Gradle resource build.
-        audio_parts = sorted(assets_dir.glob(f"{source_name}.b64.*"))
-        if not audio_parts:
-            raise SystemExit(f"Missing audio resource and base64 parts: patches/assets/{source_name}")
-        encoded_audio = "".join(part.read_text(encoding="ascii").strip() for part in audio_parts)
-        try:
-            audio_bytes = base64.b64decode(encoded_audio, validate=True)
-        except Exception as exc:
-            raise SystemExit(f"Invalid base64 audio payload for {source_name}: {exc}")
+    elif source_name == "time_erase_second_intro.ogg":
+        # Fallback to the upstream activation clip until the user's supplied
+        # intro Ogg is committed as patches/assets/time_erase_second_intro.ogg.
+        fallback = root / "common/src/main/resources/assets/roundabout/sounds/time_erase_full.ogg"
+        if not fallback.exists():
+            raise SystemExit("Missing fallback Time Erase intro audio")
+        audio_bytes = fallback.read_bytes()
+        print("NOTICE: second-scene intro is temporarily using the upstream Time Erase clip.")
+    elif source_name == "time_erase_second_main.ogg":
+        # Fallback to the already bundled Diavolo theme until the user's supplied
+        # main Ogg is committed as patches/assets/time_erase_second_main.ogg.
+        fallback = assets_dir / "JoJo_s-Bizarre-Adventure_-Golden-Wind-—-Diavolo-theme-_online-video-cutter.com_.ogg"
+        if not fallback.exists():
+            raise SystemExit("Missing fallback Diavolo theme audio")
+        audio_bytes = fallback.read_bytes()
+        print("NOTICE: second-scene main audio is temporarily using the bundled Diavolo theme.")
     else:
         raise SystemExit(f"Missing audio resource: patches/assets/{source_name}")
     if not audio_bytes.startswith(b"OggS"):

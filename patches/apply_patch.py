@@ -262,7 +262,7 @@ replace_once(
 
     }""",
     """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
-        TimeEraseFractureEffect.removeCameraShake($0);\n        TimeEraseSecondEffect.removeCameraShake($0);
+        TimeEraseFractureEffect.removeCameraShake($$0);\n        TimeEraseSecondEffect.removeCameraShake($$0);
 
     }""",
     "restore render pose after Time Erase camera shake"

@@ -731,6 +731,8 @@ public final class TimeEraseSecondEffect {
                         / SLAB_DISSOLVE_SECONDS);
         double fade = 1.0D - disperse;
 
+        int alpha = (int) (Mth.clamp((float) fade, 0.0F, 1.0F) * 255.0F);
+
 
         for (Slab slab : SLABS) {
             double angle = slab.angle + elapsed * slab.orbitSpeed;

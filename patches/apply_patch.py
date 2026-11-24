@@ -218,7 +218,7 @@ if "import net.hydra.jojomod.client.TimeEraseSecondEffect;" not in renderer.read
     marker = "import net.hydra.jojomod.client.TimeEraseFractureEffect;"
     if source.count(marker) != 1:
         raise SystemExit("import TimeEraseSecondEffect: expected one fracture-effect import")
-    renderer.write_text(source.replace(marker, marker + "\\nimport net.hydra.jojomod.client.TimeEraseSecondEffect;", 1), encoding="utf-8")
+    renderer.write_text(source.replace(marker, marker + "\nimport net.hydra.jojomod.client.TimeEraseSecondEffect;", 1), encoding="utf-8")
 
 replace_once(
     renderer,
@@ -261,6 +261,145 @@ def update_source_once(path, old, new, label):
     if count != 1:
         raise SystemExit(f"{label}: expected one anchor, found {count}")
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+# Register the standalone second Time Erase on B and tick it on the local client.
+key_registry = root / "common/src/main/java/net/hydra/jojomod/client/KeyInputRegistry.java"
+update_source_once(
+    key_registry,
+    '    public static final String POWER_SWITCH = "key.roundabout.power_switch";',
+    '''    public static final String POWER_SWITCH = "key.roundabout.power_switch";
+    public static final String KEY_SECOND_TIME_ERASE = "key.roundabout.second_time_erase";''',
+    "add second Time Erase key identifier"
+)
+update_source_once(
+    key_registry,
+    '''    public static KeyMapping power_switch = new KeyMapping(
+            KeyInputRegistry.POWER_SWITCH,
+            -1,
+            KeyInputRegistry.KEY_CATEGORY_JOJO
+    );''',
+    '''    public static KeyMapping power_switch = new KeyMapping(
+            KeyInputRegistry.POWER_SWITCH,
+            -1,
+            KeyInputRegistry.KEY_CATEGORY_JOJO
+    );
+    public static final KeyMapping secondTimeEraseKey = new KeyMapping(
+            KeyInputRegistry.KEY_SECOND_TIME_ERASE,
+            InputConstants.KEY_B,
+            KeyInputRegistry.KEY_CATEGORY_JOJO
+    );''',
+    "bind second Time Erase to B"
+)
+
+fabric_keys = root / "fabric/src/main/java/net/hydra/jojomod/registry/FabricKeyInputs.java"
+update_source_once(
+    fabric_keys,
+    "        KeyBindingHelper.registerKeyBinding(KeyInputRegistry.power_switch);",
+    "        KeyBindingHelper.registerKeyBinding(KeyInputRegistry.power_switch);\n        KeyBindingHelper.registerKeyBinding(KeyInputRegistry.secondTimeEraseKey);",
+    "register B key on Fabric"
+)
+forge_keys = root / "forge/src/main/java/net/hydra/jojomod/registry/ForgeKeyInputs.java"
+update_source_once(
+    forge_keys,
+    "         event.register(KeyInputRegistry.power_switch);",
+    "         event.register(KeyInputRegistry.power_switch);\n         event.register(KeyInputRegistry.secondTimeEraseKey);",
+    "register B key on Forge"
+)
+
+client_util = root / "common/src/main/java/net/hydra/jojomod/client/ClientUtil.java"
+update_source_once(
+    client_util,
+    "        ClientEffectUtil.updateTerrainFragments();",
+    '''        if (player != null && Minecraft.getInstance().screen == null
+                && KeyInputRegistry.secondTimeEraseKey.consumeClick()) {
+            TimeEraseSecondEffect.start(player);
+        }
+        TimeEraseSecondEffect.tick(player);
+        ClientEffectUtil.updateTerrainFragments();''',
+    "start and tick the second scene from B input"
+)
+
+# Register the two user-provided Ogg clips on both project loaders.
+mod_sounds = root / "common/src/main/java/net/hydra/jojomod/sound/ModSounds.java"
+update_source_once(
+    mod_sounds,
+    "    public static SoundEvent TIME_ERASE_END_EVENT = SoundEvent.createVariableRangeEvent(TIME_ERASE_END_ID);",
+    '''    public static SoundEvent TIME_ERASE_END_EVENT = SoundEvent.createVariableRangeEvent(TIME_ERASE_END_ID);
+    public static final String TIME_ERASE_SECOND_INTRO = "time_erase_second_intro";
+    public static final ResourceLocation TIME_ERASE_SECOND_INTRO_ID = new ResourceLocation(Roundabout.MOD_ID+":"+TIME_ERASE_SECOND_INTRO);
+    public static SoundEvent TIME_ERASE_SECOND_INTRO_EVENT = SoundEvent.createVariableRangeEvent(TIME_ERASE_SECOND_INTRO_ID);
+    public static final String TIME_ERASE_SECOND_MAIN = "time_erase_second_main";
+    public static final ResourceLocation TIME_ERASE_SECOND_MAIN_ID = new ResourceLocation(Roundabout.MOD_ID+":"+TIME_ERASE_SECOND_MAIN);
+    public static SoundEvent TIME_ERASE_SECOND_MAIN_EVENT = SoundEvent.createVariableRangeEvent(TIME_ERASE_SECOND_MAIN_ID);''',
+    "declare second Time Erase sound events"
+)
+fabric_sounds = root / "fabric/src/main/java/net/hydra/jojomod/registry/FabricSounds.java"
+update_source_once(
+    fabric_sounds,
+    "        addSound(ModSounds.TIME_ERASE_END_ID, ModSounds.TIME_ERASE_END_EVENT);",
+    '''        addSound(ModSounds.TIME_ERASE_END_ID, ModSounds.TIME_ERASE_END_EVENT);
+        addSound(ModSounds.TIME_ERASE_SECOND_INTRO_ID, ModSounds.TIME_ERASE_SECOND_INTRO_EVENT);
+        addSound(ModSounds.TIME_ERASE_SECOND_MAIN_ID, ModSounds.TIME_ERASE_SECOND_MAIN_EVENT);''',
+    "register second Time Erase sounds on Fabric"
+)
+forge_sounds = root / "forge/src/main/java/net/hydra/jojomod/registry/ForgeSounds.java"
+update_source_once(
+    forge_sounds,
+    """    public static final RegistryObject<SoundEvent> TIME_ERASE_END =
+            register(ModSounds.TIME_ERASE_END, ModSounds.TIME_ERASE_END_ID);""",
+    """    public static final RegistryObject<SoundEvent> TIME_ERASE_END =
+            register(ModSounds.TIME_ERASE_END, ModSounds.TIME_ERASE_END_ID);
+    public static final RegistryObject<SoundEvent> TIME_ERASE_SECOND_INTRO =
+            register(ModSounds.TIME_ERASE_SECOND_INTRO, ModSounds.TIME_ERASE_SECOND_INTRO_ID);
+    public static final RegistryObject<SoundEvent> TIME_ERASE_SECOND_MAIN =
+            register(ModSounds.TIME_ERASE_SECOND_MAIN, ModSounds.TIME_ERASE_SECOND_MAIN_ID);""",
+    "register second Time Erase sounds on Forge"
+)
+sounds_json = root / "common/src/main/resources/assets/roundabout/sounds.json"
+update_source_once(
+    sounds_json,
+    '''  "time_erase_end": {
+    "subtitle": "sounds.roundabout.time_erase_end",
+    "sounds": [
+      "roundabout:time_erase_end"
+    ]
+  },''',
+    '''  "time_erase_end": {
+    "subtitle": "sounds.roundabout.time_erase_end",
+    "sounds": [
+      "roundabout:time_erase_end"
+    ]
+  },
+  "time_erase_second_intro": {
+    "sounds": [
+      "roundabout:time_erase_second_intro"
+    ]
+  },
+  "time_erase_second_main": {
+    "sounds": [
+      {
+        "name": "roundabout:time_erase_second_main",
+        "stream": true
+      }
+    ]
+  },''',
+    "add second Time Erase sound definitions"
+)
+
+en_lang = root / "common/src/main/resources/assets/roundabout/lang/en_us.json"
+ru_lang = root / "common/src/main/resources/assets/roundabout/lang/ru_ru.json"
+update_source_once(
+    en_lang,
+    '  "key.roundabout.power_switch": "Switch Powers",',
+    '  "key.roundabout.power_switch": "Switch Powers",\n  "key.roundabout.second_time_erase": "Second Time Erase (B)",',
+    "add English B key label"
+)
+update_source_once(
+    ru_lang,
+    '  "key.roundabout.power_switch": "Сменить способность",',
+    '  "key.roundabout.power_switch": "Сменить способность",\n  "key.roundabout.second_time_erase": "Вторая Вырезка (B)",',
+    "add Russian B key label"
+)
 
 # Silence the activating client's world audio during Time Erase while retaining
 # only its activation/end sounds, Diavolo theme, and nearby King Crimson impacts.
@@ -494,20 +633,23 @@ update_source_once(
     "add Diavolo theme sound definition"
 )
 
-# Install the user's separately uploaded Diavolo theme. Do not alter the
-# native Time Erase activation sound here.
+# Install the Diavolo theme and the two supplied second Time Erase recordings.
 assets_dir = Path(__file__).with_name("assets")
-audio_candidates = sorted(assets_dir.glob("*.ogg"))
-if len(audio_candidates) != 1:
-    raise SystemExit("Expected exactly one .ogg file in patches/assets/; found: "
-                     + ", ".join(path.name for path in audio_candidates))
-audio_asset = audio_candidates[0]
-audio_bytes = audio_asset.read_bytes()
-if not audio_bytes.startswith(b"OggS"):
-    raise SystemExit("Diavolo theme asset is not a valid Ogg container")
-audio_target = root / "common/src/main/resources/assets/roundabout/sounds/diavolo_theme.ogg"
-audio_target.parent.mkdir(parents=True, exist_ok=True)
-audio_target.write_bytes(audio_bytes)
-print(f"Installed Diavolo theme audio asset from {audio_asset.name}.")
+audio_targets = {
+    "JoJo_s-Bizarre-Adventure_-Golden-Wind-—-Diavolo-theme-_online-video-cutter.com_.ogg": "diavolo_theme.ogg",
+    "time_erase_second_intro.ogg": "time_erase_second_intro.ogg",
+    "time_erase_second_main.ogg": "time_erase_second_main.ogg",
+}
+for source_name, target_name in audio_targets.items():
+    audio_source = assets_dir / source_name
+    if not audio_source.exists():
+        raise SystemExit(f"Missing audio resource: patches/assets/{source_name}")
+    audio_bytes = audio_source.read_bytes()
+    if not audio_bytes.startswith(b"OggS"):
+        raise SystemExit(f"Audio resource is not a valid Ogg container: {source_name}")
+    audio_target = root / "common/src/main/resources/assets/roundabout/sounds" / target_name
+    audio_target.parent.mkdir(parents=True, exist_ok=True)
+    audio_target.write_bytes(audio_bytes)
+    print(f"Installed Ogg audio resource: {source_name} -> {target_name}.")
 print("Applied the 30-block exposed-scene snapshot and the ground-launched giant stone burst.")
 

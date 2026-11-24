@@ -1,0 +1,15 @@
+{
+  "targets": ["swap"],
+  "passes": [
+    {
+      "name": "time_erase_glitch",
+      "intarget": "minecraft:main",
+      "outtarget": "swap"
+    },
+    {
+      "name": "blit",
+      "intarget": "swap",
+      "outtarget": "minecraft:main"
+    }
+  ]
+}

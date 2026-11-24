@@ -1927,16 +1927,7 @@ public final class TimeEraseFractureEffect {
         }
     }
 
-    private static float[] rockTrianglePoint(float[] a, float[] b, float[] c,
-                                             float u, float v, float nx, float ny, float nz) {
-        float w = 1.0F - u - v;
-        float inset = 0.0035F;
-        return new float[] {
-                a[0] * w + b[0] * u + c[0] * v + nx * inset,
-                a[1] * w + b[1] * u + c[1] * v + ny * inset,
-                a[2] * w + b[2] * u + c[2] * v + nz * inset
-        };
-    }
+
 
     private static void emitRockCrack(VertexConsumer consumer, Matrix4f matrix,
                                       org.joml.Matrix3f normalMatrix, TextureAtlasSprite sprite,

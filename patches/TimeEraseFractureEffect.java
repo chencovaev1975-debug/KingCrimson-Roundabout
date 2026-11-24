@@ -286,8 +286,8 @@ public final class TimeEraseFractureEffect {
     }
 
     /**
-     * The B scene has an independent audio-isolation lifetime. Normal Time Erase
-     * ticks may run alongside it but cannot restore the world categories early.
+     * B scene owns a separate audio lifetime. Ordinary Time Erase ticks must not
+     * restore world categories while the second sequence is still running.
      */
     public static void beginSecondTimeEraseAudioIsolation() {
         secondTimeEraseAudioIsolation = true;
@@ -1963,8 +1963,8 @@ public final class TimeEraseFractureEffect {
         py /= length;
         pz /= length;
 
-        // An uneven raised chip lip, sloping bevel and deep black core form
-        // a visible 3D groove along selected large/medium fragments.
+        // Irregular raised chip edge, sloping bevel and deep core form a real
+        // narrow 3D trench on selected old large/medium rock fragments.
         emitRockCrackRibbon(consumer, matrix, normalMatrix, sprite, crack,
                 crack.width * 2.70F, 76, alpha, px, py, pz, 0.0040F);
         emitRockCrackRibbon(consumer, matrix, normalMatrix, sprite, crack,

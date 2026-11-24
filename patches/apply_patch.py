@@ -121,6 +121,9 @@ addon_files = {
     "TimeEraseSlashRenderer.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSlashRenderer.java",
     "TimeEraseFutureLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseFutureLayer.java",
     "TimeEraseSecondEffect.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSecondEffect.java",
+    "time_erase_glitch_post.json": root / "common/src/main/resources/assets/minecraft/shaders/post/time_erase_glitch.json",
+    "time_erase_glitch_program.json": root / "common/src/main/resources/assets/minecraft/shaders/program/time_erase_glitch.json",
+    "time_erase_glitch.fsh": root / "common/src/main/resources/assets/minecraft/shaders/program/time_erase_glitch.fsh",
 }
 for filename, target in addon_files.items():
     source = Path(__file__).with_name(filename)
@@ -401,6 +404,52 @@ update_source_once(
     "add Russian B key label"
 )
 
+# Register the post-processing shader for the second scene's horizontal
+# pink/purple tears. It runs only during the opening and closing transitions.
+post_shader_registry = root / "common/src/main/java/net/zetalasis/client/shader/RPostShaderRegistry.java"
+update_source_once(
+    post_shader_registry,
+    "    public static IPostChainAccessor D4C_DIM_MERGE_LEAVE = null;",
+    "    public static IPostChainAccessor D4C_DIM_MERGE_LEAVE = null;\\n    public static IPostChainAccessor TIME_ERASE_GLITCH = null;",
+    "declare second Time Erase glitch post-chain"
+)
+update_source_once(
+    post_shader_registry,
+    "        D4C_DIM_MERGE_LEAVE = register(\"d4cdimmerge_leave\");",
+    "        D4C_DIM_MERGE_LEAVE = register(\"d4cdimmerge_leave\");\\n        TIME_ERASE_GLITCH = register(\"time_erase_glitch\");",
+    "register second Time Erase glitch post-chain"
+)
+
+shader_game_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/shaders/ShaderGameRenderer.java"
+update_source_once(
+    shader_game_renderer,
+    "import net.hydra.jojomod.client.ClientUtil;",
+    "import net.hydra.jojomod.client.ClientUtil;\\nimport net.hydra.jojomod.client.TimeEraseSecondEffect;",
+    "import second Time Erase transition state"
+)
+update_source_once(
+    shader_game_renderer,
+    """            RPostShaderRegistry.D4C_DIM_MERGE_LEAVE.roundabout$process(tickDelta);
+        }
+    }
+
+    @Inject(method = "reloadShaders", at=@At("HEAD"))""",
+    """            RPostShaderRegistry.D4C_DIM_MERGE_LEAVE.roundabout$process(tickDelta);
+        }
+
+        float glitchProgress = TimeEraseSecondEffect.getTransitionProgress();
+        if (glitchProgress >= 0.0F && RPostShaderRegistry.TIME_ERASE_GLITCH != null) {
+            RPostShaderRegistry.TIME_ERASE_GLITCH.roundabout$setUniform("Progress", glitchProgress);
+            RPostShaderRegistry.TIME_ERASE_GLITCH.roundabout$setUniform(
+                    "ElapsedTime", TimeEraseSecondEffect.getElapsedSeconds());
+            RPostShaderRegistry.TIME_ERASE_GLITCH.roundabout$process(tickDelta);
+        }
+    }
+
+    @Inject(method = "reloadShaders", at=@At("HEAD"))""",
+    "process second Time Erase spatial glitch"
+)
+
 # Silence the activating client's world audio during Time Erase while retaining
 # only its activation/end sounds, Diavolo theme, and nearby King Crimson impacts.
 sound_manager_mixin = root / "common/src/main/java/net/hydra/jojomod/mixin/soft_and_wet/SoftAndWetSoundManager.java"
@@ -632,6 +681,20 @@ update_source_once(
   "time_erase_end": {""",
     "add Diavolo theme sound definition"
 )
+
+
+# Copy the glitch post-chain and program resources into Minecraft's shader namespace.
+shader_assets = {
+    "time_erase_glitch_post.json": root / "common/src/main/resources/assets/minecraft/shaders/post/time_erase_glitch.json",
+    "time_erase_glitch_program.json": root / "common/src/main/resources/assets/minecraft/shaders/program/time_erase_glitch.json",
+    "time_erase_glitch.fsh": root / "common/src/main/resources/assets/minecraft/shaders/program/time_erase_glitch.fsh",
+}
+for source_name, target_path in shader_assets.items():
+    source_path = Path(__file__).with_name(source_name)
+    if not source_path.exists():
+        raise SystemExit(f"Missing second Time Erase shader asset: patches/{source_name}")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 # Install the Diavolo theme and the two supplied second Time Erase recordings.
 assets_dir = Path(__file__).with_name("assets")

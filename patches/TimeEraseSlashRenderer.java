@@ -21,14 +21,10 @@ public final class TimeEraseSlashRenderer {
     private TimeEraseSlashRenderer() {}
 
     public static void render(GuiGraphics graphics, float partialTick, int screenWidth, int screenHeight) {
-        float progress = TimeEraseSecondEffect.isActive()
-                ? TimeEraseSecondEffect.getTransitionProgress()
-                : TimeEraseFractureEffect.getSlashRevealProgress(partialTick);
+        float progress = TimeEraseFractureEffect.getSlashRevealProgress(partialTick);
         if (progress < 0.0F || screenWidth <= 0 || screenHeight <= 0) return;
 
-        float fade = TimeEraseSecondEffect.isActive()
-                ? TimeEraseSecondEffect.getTransitionFade()
-                : TimeEraseFractureEffect.getSlashFade(partialTick);
+        float fade = TimeEraseFractureEffect.getSlashFade(partialTick);
         if (fade <= 0.0F) return;
 
         // Flush queued vanilla/mod GUI quads before drawing the cut directly.

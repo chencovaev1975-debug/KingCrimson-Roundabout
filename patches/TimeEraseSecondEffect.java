@@ -45,11 +45,13 @@ import java.util.Random;
 public final class TimeEraseSecondEffect {
     private static final long MAIN_DURATION_NANOS = 14_884_014_000L;
 
-    private static final double SLAB_LAUNCH_SECONDS = 2.78D;
-    private static final double MAIN_AUDIO_DELAY_SECONDS = 3.55D;
+    private static final double SLAB_LAUNCH_SECONDS = 1.00D;
+    private static final double MAIN_AUDIO_DELAY_SECONDS = 2.70D;
     private static final double TRANSITION_SECONDS = 0.30D;
-    private static final int SLAB_COUNT = 13;
-    private static final double SLAB_DISSOLVE_SECONDS = 2.25D;
+    private static final double SLAB_DISSOLVE_START_SECONDS = 3.05D;
+    private static final double SLAB_DISSOLVE_SECONDS = 0.25D;
+    private static final double WORLD_HIDE_SECONDS = 3.30D;
+    private static final int SLAB_COUNT = 20;
 
     private static final ResourceLocation FLAT_WHITE_TEXTURE =
             new ResourceLocation(Roundabout.MOD_ID, "textures/misc/flat_white.png");
@@ -226,14 +228,26 @@ public final class TimeEraseSecondEffect {
         return getTransitionProgress() >= 0.0F ? 1.0F : 0.0F;
     }
 
+    /** Fade the native six-face cosmic skybox with the same opening/closing transition. */
+    public static float getSkyAlpha(float partialTick) {
+        if (!active) return 0.0F;
+        float progress = getTransitionProgress();
+        return progress >= 0.0F ? Mth.clamp(progress, 0.0F, 1.0F) : 1.0F;
+    }
+
+    /** The ordinary terrain remains visible until the stones and cracks finish. */
+    public static boolean isWorldHidden() {
+        return active && elapsedSeconds() >= WORLD_HIDE_SECONDS;
+    }
+
     /** Match the restrained single-axis shake of the original Time Erase. */
     public static void applyCameraShake(PoseStack poseStack, float partialTick) {
         cameraShakeX = cameraShakeY = cameraShakeZ = 0.0D;
         if (!active || startNanos == 0L) return;
 
         double t = elapsedSeconds() + partialTick / 20.0D;
-        final double shatterStart = 2.30D;
-        final double shakeDuration = 0.90D;
+        final double shatterStart = 1.00D;
+        final double shakeDuration = 0.72D;
         if (t < shatterStart || t >= shatterStart + shakeDuration) return;
 
         double progress = (t - shatterStart) / shakeDuration;
@@ -573,12 +587,16 @@ public final class TimeEraseSecondEffect {
         // pieces alternate between a nearer and a farther orbit so their
         // silhouettes keep real gaps instead of merging into one rock wall.
         final double[] orbitRadii = {
-                7.2D, 11.0D, 7.4D, 11.2D, 7.3D, 11.3D, 7.5D,
-                11.0D, 7.1D, 11.2D, 7.4D, 11.1D, 10.9D
+                5.8D, 9.4D, 7.0D, 10.0D, 6.2D,
+                9.0D, 7.3D, 10.2D, 5.7D, 9.3D,
+                6.8D, 10.1D, 6.0D, 9.6D, 7.2D,
+                10.0D, 5.9D, 9.2D, 7.0D, 9.8D
         };
         final double[] orbitHeights = {
-                0.2D, 4.2D, 8.1D, 0.5D, 4.4D, 8.4D, 0.3D,
-                4.1D, 8.2D, 0.6D, 4.3D, 8.3D, 4.5D
+                0.3D, 4.5D, 8.2D, 0.6D, 4.2D,
+                8.5D, 0.2D, 4.7D, 8.0D, 0.7D,
+                4.5D, 8.3D, 0.4D, 4.4D, 8.1D,
+                0.5D, 4.3D, 8.4D, 0.1D, 4.8D
         };
 
         for (int i = 0; i < SLAB_COUNT; i++) {
@@ -589,7 +607,7 @@ public final class TimeEraseSecondEffect {
             double orbitHeight = orbitHeights[i] + (random.nextDouble() - 0.5D) * 0.30D;
             // Almost identical angular velocity keeps the spacing stable while
             // allowing a tiny natural variation from one fragment to another.
-            double orbitSpeed = 0.155D + (i % 3) * 0.003D;
+            double orbitSpeed = 0.14D + (i % 5) * 0.006D;
 
             int blockX = Mth.floor(centerX + Math.cos(angle) * launchRadius);
             int blockZ = Mth.floor(centerZ + Math.sin(angle) * launchRadius);
@@ -603,7 +621,7 @@ public final class TimeEraseSecondEffect {
             SLABS.add(new Slab(
                     angle, launchRadius, orbitRadius, orbitHeight, orbitSpeed,
                     groundY, random.nextDouble() * Math.PI * 2.0D,
-                    2.28F + random.nextFloat() * 0.28F,
+                    1.95F + random.nextFloat() * 0.30F,
                     random.nextFloat() * 360.0F,
                     random.nextFloat() * 360.0F,
                     random.nextFloat() * 360.0F,
@@ -616,43 +634,78 @@ public final class TimeEraseSecondEffect {
     }
 
     private static SlabMesh createSlabMesh(Random random) {
-        int sides = 6 + random.nextInt(2);
-        float halfX = 0.82F + random.nextFloat() * 0.20F;
-        float halfZ = 0.82F + random.nextFloat() * 0.20F;
-        float halfY = 0.30F + random.nextFloat() * 0.18F;
+        // Five distinct silhouettes prevent the orbit from looking like a ring
+        // of copies: broad broken plates, narrow upright shards, wedge slabs,
+        // chunky masonry and long angular splinters.
+        int profile = random.nextInt(5);
+        int sides = 5 + random.nextInt(5);
+        float halfX;
+        float halfY;
+        float halfZ;
+        if (profile == 0) {
+            halfX = 0.95F + random.nextFloat() * 0.35F;
+            halfY = 0.24F + random.nextFloat() * 0.18F;
+            halfZ = 0.55F + random.nextFloat() * 0.25F;
+        } else if (profile == 1) {
+            halfX = 0.34F + random.nextFloat() * 0.18F;
+            halfY = 0.72F + random.nextFloat() * 0.24F;
+            halfZ = 0.42F + random.nextFloat() * 0.24F;
+        } else if (profile == 2) {
+            halfX = 0.88F + random.nextFloat() * 0.28F;
+            halfY = 0.38F + random.nextFloat() * 0.22F;
+            halfZ = 0.30F + random.nextFloat() * 0.18F;
+        } else if (profile == 3) {
+            halfX = 0.62F + random.nextFloat() * 0.30F;
+            halfY = 0.56F + random.nextFloat() * 0.26F;
+            halfZ = 0.62F + random.nextFloat() * 0.30F;
+        } else {
+            halfX = 0.30F + random.nextFloat() * 0.20F;
+            halfY = 0.42F + random.nextFloat() * 0.30F;
+            halfZ = 0.92F + random.nextFloat() * 0.32F;
+        }
+
         float phase = random.nextFloat() * (float) (Math.PI * 2.0D);
-        float ringTwist = (random.nextFloat() - 0.5F) * 0.13F;
-        float leanX = (random.nextFloat() - 0.5F) * 0.10F;
-        float leanZ = (random.nextFloat() - 0.5F) * 0.10F;
+        float ringTwist = (random.nextFloat() - 0.5F) * 0.32F;
+        float leanX = (random.nextFloat() - 0.5F) * 0.30F;
+        float leanZ = (random.nextFloat() - 0.5F) * 0.30F;
+        float topLeanX = (random.nextFloat() - 0.5F) * halfX * 0.28F;
+        float topLeanZ = (random.nextFloat() - 0.5F) * halfZ * 0.28F;
+        float middleShiftX = (random.nextFloat() - 0.5F) * halfX * 0.22F;
+        float middleShiftZ = (random.nextFloat() - 0.5F) * halfZ * 0.22F;
 
         float[][] vertices = new float[sides * 3 + 2][3];
         for (int ring = 0; ring < 3; ring++) {
             for (int side = 0; side < sides; side++) {
                 float angle = phase + (float) (Math.PI * 2.0D * side / sides)
-                        + (ring - 1) * ringTwist;
-                float radial = 0.86F + random.nextFloat() * 0.26F;
-                float corner = (float) Math.sin(side * 2.31F + phase) * 0.055F
-                        + (random.nextFloat() - 0.5F) * 0.11F;
+                        + (ring - 1) * ringTwist
+                        + (random.nextFloat() - 0.5F) * 0.13F;
+                float radial = 0.62F + random.nextFloat() * 0.55F;
+                float corner = (float) Math.sin(side * 2.31F + phase) * 0.11F
+                        + (random.nextFloat() - 0.5F) * 0.16F;
                 float x = (float) Math.cos(angle) * halfX * (radial + corner);
-                float z = (float) Math.sin(angle) * halfZ * (radial - corner * 0.42F);
+                float z = (float) Math.sin(angle) * halfZ * (radial - corner * 0.52F);
                 float y;
                 if (ring == 0) {
-                    y = -halfY * (0.72F + random.nextFloat() * 0.25F);
+                    y = -halfY * (0.58F + random.nextFloat() * 0.54F);
+                    x += leanX;
+                    z += leanZ;
                 } else if (ring == 1) {
-                    y = (random.nextFloat() - 0.5F) * halfY * 0.32F;
+                    y = (random.nextFloat() - 0.5F) * halfY * 0.84F;
+                    x += middleShiftX;
+                    z += middleShiftZ;
                 } else {
-                    y = halfY * (0.68F + random.nextFloat() * 0.36F);
+                    y = halfY * (0.48F + random.nextFloat() * 0.58F);
+                    x += topLeanX;
+                    z += topLeanZ;
                 }
-                x += ring * leanX;
-                z += ring * leanZ;
                 vertices[ring * sides + side] = new float[] {x, y, z};
             }
         }
 
         int lowerCenter = sides * 3;
         int upperCenter = lowerCenter + 1;
-        vertices[lowerCenter] = new float[] {leanX, -halfY * 0.75F, leanZ};
-        vertices[upperCenter] = new float[] {leanX * 2.0F, halfY * 0.72F, leanZ * 2.0F};
+        vertices[lowerCenter] = new float[] {leanX, -halfY * 0.62F, leanZ};
+        vertices[upperCenter] = new float[] {topLeanX, halfY * 0.62F, topLeanZ};
 
         int[][] faces = new int[sides * 6][3];
         int face = 0;
@@ -707,6 +760,7 @@ public final class TimeEraseSecondEffect {
                               Camera camera, float partialTick) {
         if (!active || capturedLevel == null) return;
         double elapsed = elapsedSeconds() + partialTick / 20.0D;
+        if (elapsed >= WORLD_HIDE_SECONDS) return;
         renderGroundCracks(poseStack, buffer, camera, elapsed);
         if (slabsCreated) renderSlabs(poseStack, buffer, camera, elapsed);
     }
@@ -723,12 +777,8 @@ public final class TimeEraseSecondEffect {
 
         double flightAge = Math.max(0.0D, elapsed - SLAB_LAUNCH_SECONDS);
         float riseProgress = (float) smoothstep(flightAge / 0.90D);
-        double mainElapsed = mainAudioStartNanos == 0L ? 0.0D
-                : (System.nanoTime() - mainAudioStartNanos) / 1_000_000_000.0D;
-        double mainDuration = MAIN_DURATION_NANOS / 1_000_000_000.0D;
-        double disperse = mainAudioStartNanos == 0L ? 0.0D
-                : smoothstep((mainElapsed - (mainDuration - SLAB_DISSOLVE_SECONDS))
-                        / SLAB_DISSOLVE_SECONDS);
+        double disperse = smoothstep((elapsed - SLAB_DISSOLVE_START_SECONDS)
+                / SLAB_DISSOLVE_SECONDS);
         double fade = 1.0D - disperse;
 
         int alpha = (int) (Mth.clamp((float) fade, 0.0F, 1.0F) * 255.0F);

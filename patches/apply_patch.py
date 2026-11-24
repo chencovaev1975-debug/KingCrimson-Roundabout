@@ -247,10 +247,72 @@ replace_once(
 
     }""",
     """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
-        TimeEraseFractureEffect.removeCameraShake($$0);\n        TimeEraseSecondEffect.removeCameraShake($$0);
+        TimeEraseFractureEffect.removeCameraShake($0);\n        TimeEraseSecondEffect.removeCameraShake($0);
 
     }""",
     "restore render pose after Time Erase camera shake"
+)
+
+# B-scene skybox and terrain visibility are independent from the original ability.
+# Keep ordinary ground visible during the crack/eruption beat, then hide it at 3.3s.
+replace_once(
+    renderer,
+    """        if (ClientUtil.isUsingTimeErase) {
+            ci.cancel();
+        }""",
+    """        if (ClientUtil.isUsingTimeErase || TimeEraseSecondEffect.isWorldHidden()) {
+            ci.cancel();
+        }""",
+    "hide ordinary chunks after the B-scene ground eruption"
+)
+replace_once(
+    renderer,
+    """    private void roundabout$renderClouds(PoseStack $0, Matrix4f $1, float $2, double $3, double $4, double $5, CallbackInfo ci) {
+        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {""",
+    """    private void roundabout$renderClouds(PoseStack $0, Matrix4f $1, float $2, double $3, double $4, double $5, CallbackInfo ci) {
+        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ() || TimeEraseSecondEffect.isActive()) {""",
+    "hide ordinary clouds during the B-scene cosmic sky"
+)
+replace_once(
+    renderer,
+    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
+        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {""",
+    """    private void roundabout$renderEndSky(PoseStack $0, CallbackInfo ci) {
+        if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ() || TimeEraseSecondEffect.isActive()) {""",
+    "hide vanilla End sky for the B-scene transition"
+)
+replace_once(
+    renderer,
+    "        if (ClientUtil.renderTimeErase()) {\n            if (!$4) {",
+    "        if (ClientUtil.renderTimeErase() || TimeEraseSecondEffect.isActive()) {\n            if (!$4) {",
+    "render native six-face cosmic skybox during the B-scene"
+)
+replace_once(
+    renderer,
+    """                    float alpha = (float) ClientUtil.renderTimeEraseTime();
+                    float dblcheck = $2 % 1;
+                    if (ClientUtil.isUsingTimeErase) {
+                        alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);
+                    } else {
+                        alpha = Math.max(alpha - dblcheck, 0);
+                    }
+                    alpha /= (float) ClientUtil.fadeTime;
+                    alpha = Mth.clamp(alpha, 0, 1F);""",
+    """                    float alpha;
+                    if (TimeEraseSecondEffect.isActive()) {
+                        alpha = TimeEraseSecondEffect.getSkyAlpha($2);
+                    } else {
+                        alpha = (float) ClientUtil.renderTimeEraseTime();
+                        float dblcheck = $2 % 1;
+                        if (ClientUtil.isUsingTimeErase) {
+                            alpha = Math.min(alpha + dblcheck, ClientUtil.fadeTime);
+                        } else {
+                            alpha = Math.max(alpha - dblcheck, 0);
+                        }
+                        alpha /= (float) ClientUtil.fadeTime;
+                        alpha = Mth.clamp(alpha, 0, 1F);
+                    }""",
+    "fade B-scene cosmic skybox with its native transition"
 )
 
 
@@ -649,24 +711,8 @@ for source_name, target_name in audio_targets.items():
     audio_source = assets_dir / source_name
     if audio_source.exists():
         audio_bytes = audio_source.read_bytes()
-    elif source_name == "time_erase_second_intro.ogg":
-        # Fallback to the upstream activation clip until the user's supplied
-        # intro Ogg is committed as patches/assets/time_erase_second_intro.ogg.
-        fallback = root / "common/src/main/resources/assets/roundabout/sounds/time_erase_full.ogg"
-        if not fallback.exists():
-            raise SystemExit("Missing fallback Time Erase intro audio")
-        audio_bytes = fallback.read_bytes()
-        print("NOTICE: second-scene intro is temporarily using the upstream Time Erase clip.")
-    elif source_name == "time_erase_second_main.ogg":
-        # Fallback to the already bundled Diavolo theme until the user's supplied
-        # main Ogg is committed as patches/assets/time_erase_second_main.ogg.
-        fallback = assets_dir / "JoJo_s-Bizarre-Adventure_-Golden-Wind-—-Diavolo-theme-_online-video-cutter.com_.ogg"
-        if not fallback.exists():
-            raise SystemExit("Missing fallback Diavolo theme audio")
-        audio_bytes = fallback.read_bytes()
-        print("NOTICE: second-scene main audio is temporarily using the bundled Diavolo theme.")
     else:
-        raise SystemExit(f"Missing audio resource: patches/assets/{source_name}")
+        raise SystemExit(f"Missing required user audio resource: patches/assets/{source_name}")
     if not audio_bytes.startswith(b"OggS"):
         raise SystemExit(f"Audio resource is not a valid Ogg container: {source_name}")
     audio_target = root / "common/src/main/resources/assets/roundabout/sounds" / target_name

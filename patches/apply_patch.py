@@ -120,7 +120,6 @@ fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding=
 addon_files = {
     "TimeEraseSlashRenderer.java": root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseSlashRenderer.java",
     "TimeEraseFutureLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseFutureLayer.java",
-    "TimeEraseAuraLayer.java": root / "common/src/main/java/net/hydra/jojomod/client/models/layers/TimeEraseAuraLayer.java",
 }
 for filename, target in addon_files.items():
     source = Path(__file__).with_name(filename)
@@ -318,16 +317,14 @@ if "roundabout$filterTimeEraseDelayedSound" not in sound_mixin_source:
         encoding="utf-8"
     )
 
-# Attach the red future-image layer and procedural King Crimson fire aura.
-# Each layer filters itself to the local target so other players are unaffected.
+# Attach only the red future-image layer.
 living_renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/ZLivingEntityRenderer.java"
 update_source_once(
     living_renderer,
     "import net.hydra.jojomod.client.models.layers.FrozenLayer;",
     """import net.hydra.jojomod.client.models.layers.FrozenLayer;
-import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;
-import net.hydra.jojomod.client.models.layers.TimeEraseAuraLayer;""",
-    "import the Time Erase future-image and procedural aura layers"
+import net.hydra.jojomod.client.models.layers.TimeEraseFutureLayer;""",
+    "import only the Time Erase future-image layer"
 )
 def insert_line_after_unique(path, marker, line_to_insert, label):
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -343,13 +340,6 @@ insert_line_after_unique(
     "        this.addLayer(new TimeEraseFutureLayer<>(this));",
     "attach the future hologram to living renderers"
 )
-insert_line_after_unique(
-    living_renderer,
-    "this.addLayer(new TimeEraseFutureLayer<>(this));",
-    "        this.addLayer(new TimeEraseAuraLayer<>(this));",
-    "attach procedural King Crimson fire aura to living renderers"
-)
-
 update_source_once(
     living_renderer,
     """    private void roundabout$applyInvisibilityFade(T entity, float entityYaw, float partialTicks, PoseStack poseStack, MultiBufferSource buffer, int packedLight, CallbackInfo ci) {

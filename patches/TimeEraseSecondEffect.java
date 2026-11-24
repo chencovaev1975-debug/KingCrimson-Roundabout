@@ -43,7 +43,6 @@ import java.util.Random;
  * collision, entity positions, or server state.
  */
 public final class TimeEraseSecondEffect {
-    private static final long INTRO_DURATION_NANOS = 2_693_515_000L;
     private static final long MAIN_DURATION_NANOS = 14_884_014_000L;
 
     private static final double SLAB_LAUNCH_SECONDS = 2.78D;
@@ -520,8 +519,6 @@ public final class TimeEraseSecondEffect {
     private static void createSlabs() {
         SLABS.clear();
         Random random = new Random(startNanos ^ 0x4B435F534C414253L);
-        double yaw = Math.toRadians(facingYaw);
-
         for (int i = 0; i < SLAB_COUNT; i++) {
             double angle = Math.PI * 2.0D * i / SLAB_COUNT
                     + (random.nextDouble() - 0.5D) * 0.16D;

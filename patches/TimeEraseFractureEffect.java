@@ -289,7 +289,15 @@ public final class TimeEraseFractureEffect {
      * Allowed King Crimson sounds are re-routed through MASTER by the mixin,
      * with their original category volume folded into the sound instance itself.
      */
-    private static void muteWorldAudio() {
+    public static void beginSecondTimeEraseAudioIsolation() {
+        muteWorldAudio();
+    }
+
+    public static void endSecondTimeEraseAudioIsolation() {
+        restoreWorldAudio();
+    }
+
+    public static void muteWorldAudio() {
         if (worldAudioMuted) return;
         Minecraft minecraft = Minecraft.getInstance();
         SoundManager soundManager = minecraft.getSoundManager();
@@ -329,7 +337,9 @@ public final class TimeEraseFractureEffect {
 
         if (id.equals(ModSounds.TIME_ERASE_FULL_ID)
                 || id.equals(ModSounds.TIME_ERASE_END_ID)
-                || id.equals(ModSounds.DIAVOLO_THEME_ID)) {
+                || id.equals(ModSounds.DIAVOLO_THEME_ID)
+                || id.equals(ModSounds.TIME_ERASE_SECOND_INTRO_ID)
+                || id.equals(ModSounds.TIME_ERASE_SECOND_MAIN_ID)) {
             return true;
         }
 
@@ -1663,7 +1673,7 @@ public final class TimeEraseFractureEffect {
             faces[face++] = new int[] {upperCenter, topA, topB};
         }
 
-        RockDentGeometry damage = createHammerDamage(random, vertices, faces, sizeClass);
+        RockCrackGeometry damage = createRockSurfaceCracks(random, vertices, faces, sizeClass);
         return new RockMesh(damage.vertices, damage.faces, damage.cracks);
     }
 
@@ -1677,21 +1687,26 @@ public final class TimeEraseFractureEffect {
      * The struck triangle is removed and rebuilt as concentric 3D rings, so the
      * crater is part of the rock mesh itself rather than a decal on its surface.
      */
-    private static RockDentGeometry createHammerDamage(Random random, float[][] vertices,
-                                                         int[][] faces, int sizeClass) {
+    /**
+     * Selected large and medium fragments receive an irregular branching crack
+     * network on one broad facet. The original polyhedron is preserved:
+     * no circular punch marks, crater rings, or round depressions are generated.
+     */
+    private static RockCrackGeometry createRockSurfaceCracks(Random random,
+                                                              float[][] vertices,
+                                                              int[][] faces,
+                                                              int sizeClass) {
         float chance = sizeClass == 0 ? 0.46F : sizeClass == 1 ? 0.29F : 0.0F;
         if (random.nextFloat() >= chance || faces.length == 0) {
-            return new RockDentGeometry(vertices, faces, new RockCrack[0]);
+            return new RockCrackGeometry(vertices, faces, new RockCrack[0]);
         }
 
-        int selectedFace = 0;
+        int selectedFace = random.nextInt(faces.length);
         float bestArea = -1.0F;
         for (int attempt = 0; attempt < 18; attempt++) {
             int candidate = random.nextInt(faces.length);
             int[] face = faces[candidate];
-            float[] a = vertices[face[0]];
-            float[] b = vertices[face[1]];
-            float[] c = vertices[face[2]];
+            float[] a = vertices[face[0]], b = vertices[face[1]], c = vertices[face[2]];
             float area = rockTriangleAreaSquared(a, b, c);
             if (area > bestArea) {
                 bestArea = area;
@@ -1699,10 +1714,8 @@ public final class TimeEraseFractureEffect {
             }
         }
 
-        int[] struckFace = faces[selectedFace];
-        float[] a = vertices[struckFace[0]];
-        float[] b = vertices[struckFace[1]];
-        float[] c = vertices[struckFace[2]];
+        int[] face = faces[selectedFace];
+        float[] a = vertices[face[0]], b = vertices[face[1]], c = vertices[face[2]];
         float ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
         float vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
         float nx = uy * vz - uz * vy;
@@ -1710,7 +1723,7 @@ public final class TimeEraseFractureEffect {
         float nz = ux * vy - uy * vx;
         float normalLength = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (normalLength < 1.0E-5F) {
-            return new RockDentGeometry(vertices, faces, new RockCrack[0]);
+            return new RockCrackGeometry(vertices, faces, new RockCrack[0]);
         }
         nx /= normalLength;
         ny /= normalLength;
@@ -1734,97 +1747,36 @@ public final class TimeEraseFractureEffect {
             nz = -nz;
         }
 
-        List<float[]> damagedVertices = new ArrayList<>(vertices.length + 49);
-        damagedVertices.addAll(Arrays.asList(vertices));
-        List<int[]> damagedFaces = new ArrayList<>(faces.length + 72);
-        for (int faceIndex = 0; faceIndex < faces.length; faceIndex++) {
-            if (faceIndex != selectedFace) {
-                damagedFaces.add(faces[faceIndex]);
+        List<RockCrack> cracks = new ArrayList<>(28);
+        float originU = 0.22F + random.nextFloat() * 0.22F;
+        float originV = 0.18F + random.nextFloat() * 0.24F;
+        if (originU + originV > 0.78F) originV = 0.78F - originU;
+
+        int firstEdge = random.nextInt(3);
+        int primaryBranches = 3 + random.nextInt(2);
+        for (int branch = 0; branch < primaryBranches; branch++) {
+            float branchU = originU + (random.nextFloat() - 0.5F) * 0.075F;
+            float branchV = originV + (random.nextFloat() - 0.5F) * 0.075F;
+            branchU = Math.max(0.045F, Math.min(0.91F, branchU));
+            branchV = Math.max(0.045F, Math.min(0.91F - branchU, branchV));
+
+            addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
+                    branchU, branchV, (firstEdge + branch) % 3,
+                    0.0055F + random.nextFloat() * 0.0030F);
+
+            if ((branch & 1) == 0) {
+                float forkU = originU * 0.58F + branchU * 0.42F
+                        + (random.nextFloat() - 0.5F) * 0.065F;
+                float forkV = originV * 0.58F + branchV * 0.42F
+                        + (random.nextFloat() - 0.5F) * 0.065F;
+                forkU = Math.max(0.04F, Math.min(0.90F, forkU));
+                forkV = Math.max(0.04F, Math.min(0.90F - forkU, forkV));
+                addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
+                        forkU, forkV, (firstEdge + branch + 2) % 3,
+                        0.0038F + random.nextFloat() * 0.0022F);
             }
         }
-
-        final int ringSegments = 12;
-        int[] perimeter = new int[ringSegments];
-        int[] lip = new int[ringSegments];
-        int[] bevel = new int[ringSegments];
-        int[] basin = new int[ringSegments];
-
-        // Twelve points subdivide the old triangle boundary without changing
-        // its silhouette. Their positions remain exactly on the original edges.
-        for (int i = 0; i < ringSegments; i++) {
-            int edge = i / 4;
-            float t = (i % 4) * 0.25F;
-            float wa, wb, wc;
-            if (edge == 0) {
-                wa = 1.0F - t; wb = t; wc = 0.0F;
-            } else if (edge == 1) {
-                wa = 0.0F; wb = 1.0F - t; wc = t;
-            } else {
-                wa = t; wb = 0.0F; wc = 1.0F - t;
-            }
-            perimeter[i] = damagedVertices.size();
-            damagedVertices.add(rockBarycentricPoint(a, b, c, wa, wb, wc, nx, ny, nz, 0.0F));
-        }
-
-        float craterRadius = 0.198F + random.nextFloat() * 0.018F;
-        for (int i = 0; i < ringSegments; i++) {
-            float angle = (float) (Math.PI * 2.0D * i / ringSegments);
-            float cos = (float) Math.cos(angle);
-            float sin = (float) Math.sin(angle);
-            float irregular = 0.92F + random.nextFloat() * 0.16F;
-            float wa = 1.0F / 3.0F + cos * craterRadius * irregular;
-            float wb = 1.0F / 3.0F + sin * craterRadius * irregular;
-            float wc = 1.0F - wa - wb;
-
-            // Hammered lip: uneven raised chips around the perimeter.
-            float lipLift = 0.004F + random.nextFloat() * 0.012F;
-            if (i % 4 == 0) lipLift += 0.008F + random.nextFloat() * 0.010F;
-            lip[i] = damagedVertices.size();
-            damagedVertices.add(rockBarycentricPoint(a, b, c, wa, wb, wc,
-                    nx, ny, nz, lipLift));
-
-            float innerWa = 1.0F / 3.0F + cos * craterRadius * 0.69F;
-            float innerWb = 1.0F / 3.0F + sin * craterRadius * 0.69F;
-            bevel[i] = damagedVertices.size();
-            damagedVertices.add(rockBarycentricPoint(a, b, c, innerWa, innerWb,
-                    1.0F - innerWa - innerWb, nx, ny, nz,
-                    -0.043F - random.nextFloat() * 0.018F));
-
-            float floorWa = 1.0F / 3.0F + cos * craterRadius * 0.31F;
-            float floorWb = 1.0F / 3.0F + sin * craterRadius * 0.31F;
-            basin[i] = damagedVertices.size();
-            damagedVertices.add(rockBarycentricPoint(a, b, c, floorWa, floorWb,
-                    1.0F - floorWa - floorWb, nx, ny, nz,
-                    -0.092F - random.nextFloat() * 0.024F));
-        }
-
-        int craterCenter = damagedVertices.size();
-        damagedVertices.add(rockBarycentricPoint(a, b, c,
-                1.0F / 3.0F, 1.0F / 3.0F, 1.0F / 3.0F,
-                nx, ny, nz, -0.135F - random.nextFloat() * 0.025F));
-
-        for (int i = 0; i < ringSegments; i++) {
-            int next = (i + 1) % ringSegments;
-
-            // Unstruck surface tapering into the raised impact lip.
-            damagedFaces.add(new int[] {perimeter[i], perimeter[next], lip[next]});
-            damagedFaces.add(new int[] {perimeter[i], lip[next], lip[i]});
-
-            // Chipped rim rolls down into a steep, visibly concave bevel.
-            damagedFaces.add(new int[] {lip[i], lip[next], bevel[next]});
-            damagedFaces.add(new int[] {lip[i], bevel[next], bevel[i]});
-
-            // The inner basin is deeper and flatter, like stone pushed inward.
-            damagedFaces.add(new int[] {bevel[i], bevel[next], basin[next]});
-            damagedFaces.add(new int[] {bevel[i], basin[next], basin[i]});
-            damagedFaces.add(new int[] {basin[i], basin[next], craterCenter});
-        }
-
-        RockCrack[] cracks = createHammerCracks(random, a, b, c, nx, ny, nz, craterRadius);
-        return new RockDentGeometry(
-                damagedVertices.toArray(new float[0][]),
-                damagedFaces.toArray(new int[0][]),
-                cracks);
+        return new RockCrackGeometry(vertices, faces, cracks.toArray(new RockCrack[0]));
     }
 
     private static float rockTriangleAreaSquared(float[] a, float[] b, float[] c) {
@@ -1834,43 +1786,6 @@ public final class TimeEraseFractureEffect {
         float ny = uz * vx - ux * vz;
         float nz = ux * vy - uy * vx;
         return nx * nx + ny * ny + nz * nz;
-    }
-
-    private static float[] rockBarycentricPoint(float[] a, float[] b, float[] c,
-                                                float wa, float wb, float wc,
-                                                float nx, float ny, float nz,
-                                                float normalOffset) {
-        return new float[] {
-                a[0] * wa + b[0] * wb + c[0] * wc + nx * normalOffset,
-                a[1] * wa + b[1] * wb + c[1] * wc + ny * normalOffset,
-                a[2] * wa + b[2] * wb + c[2] * wc + nz * normalOffset
-        };
-    }
-
-    /**
-     * Fractures radiate from the struck lip and split toward the edges of the
-     * same face, tying the dark grooves to the actual 3D dent.
-     */
-    private static RockCrack[] createHammerCracks(Random random,
-                                                   float[] a, float[] b, float[] c,
-                                                   float nx, float ny, float nz,
-                                                   float craterRadius) {
-        List<RockCrack> cracks = new ArrayList<>(22);
-        int branches = 3 + random.nextInt(2);
-        int firstEdge = random.nextInt(3);
-        for (int branch = 0; branch < branches; branch++) {
-            float angle = (float) (Math.PI * 2.0D * branch / branches)
-                    + (random.nextFloat() - 0.5F) * 0.42F;
-            float radius = craterRadius * (0.88F + random.nextFloat() * 0.12F);
-            float wa = 1.0F / 3.0F + (float) Math.cos(angle) * radius;
-            float wb = 1.0F / 3.0F + (float) Math.sin(angle) * radius;
-            float startU = wb;
-            float startV = 1.0F - wa - wb;
-            addRockCrackBranch(cracks, random, a, b, c, nx, ny, nz,
-                    startU, startV, (firstEdge + branch) % 3,
-                    0.0048F + random.nextFloat() * 0.0024F);
-        }
-        return cracks.toArray(new RockCrack[0]);
     }
 
     // Shared barycentric point helper for the branching grooves cut into each selected rock face.
@@ -2534,12 +2449,12 @@ public final class TimeEraseFractureEffect {
         }
     }
 
-    private static final class RockDentGeometry {
+    private static final class RockCrackGeometry {
         final float[][] vertices;
         final int[][] faces;
         final RockCrack[] cracks;
 
-        RockDentGeometry(float[][] vertices, int[][] faces, RockCrack[] cracks) {
+        RockCrackGeometry(float[][] vertices, int[][] faces, RockCrack[] cracks) {
             this.vertices = vertices;
             this.faces = faces;
             this.cracks = cracks;

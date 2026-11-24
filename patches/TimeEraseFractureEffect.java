@@ -101,8 +101,6 @@ public final class TimeEraseFractureEffect {
     };
     private static final RenderType ROCK_RENDER_TYPE =
             RenderType.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
-    private static final RenderType ROCK_CRACK_RENDER_TYPE =
-            RenderType.entityTranslucent(new ResourceLocation("roundabout", "textures/misc/flat_white.png"));
     private static final List<BlockRecord> BLOCKS = new ArrayList<>(MAX_BLOCKS);
     // Only real terrain-surface blocks may seed the upward rock eruption.
     private static final List<BlockRecord> GROUND_ANCHORS = new ArrayList<>(3000);
@@ -1802,7 +1800,8 @@ public final class TimeEraseFractureEffect {
     }
 
     private static void emitRockCrack(VertexConsumer consumer, Matrix4f matrix,
-                                      org.joml.Matrix3f normalMatrix, RockCrack crack, int alpha) {
+                                      org.joml.Matrix3f normalMatrix, TextureAtlasSprite sprite,
+                                      RockCrack crack, int alpha) {
         float dx = crack.end[0] - crack.start[0];
         float dy = crack.end[1] - crack.start[1];
         float dz = crack.end[2] - crack.start[2];
@@ -1815,19 +1814,19 @@ public final class TimeEraseFractureEffect {
         py /= length;
         pz /= length;
 
-        // The charcoal bevel is slightly higher than the almost-black centre,
-        // making the crack read as a shallow groove rather than a painted line.
-        emitCrackRibbon(consumer, matrix, normalMatrix, crack,
-                crack.width * 2.65F, 48, 40, 35, alpha, px, py, pz, 0.0015F);
-        emitCrackRibbon(consumer, matrix, normalMatrix, crack,
-                crack.width * 0.78F, 10, 8, 8, Math.min(255, alpha + 22),
+        // A wider charcoal bevel and a narrow black core create a shallow groove.
+        emitRockCrackRibbon(consumer, matrix, normalMatrix, sprite, crack,
+                crack.width * 2.65F, 48, alpha, px, py, pz, 0.0015F);
+        emitRockCrackRibbon(consumer, matrix, normalMatrix, sprite, crack,
+                crack.width * 0.78F, 12, Math.min(255, alpha + 22),
                 px, py, pz, 0.0028F);
     }
 
-    private static void emitCrackRibbon(VertexConsumer consumer, Matrix4f matrix,
-                                        org.joml.Matrix3f normalMatrix, RockCrack crack,
-                                        float width, int red, int green, int blue, int alpha,
-                                        float px, float py, float pz, float normalOffset) {
+    private static void emitRockCrackRibbon(VertexConsumer consumer, Matrix4f matrix,
+                                            org.joml.Matrix3f normalMatrix,
+                                            TextureAtlasSprite sprite, RockCrack crack,
+                                            float width, int color, int alpha,
+                                            float px, float py, float pz, float normalOffset) {
         float[] leftStart = new float[] {
                 crack.start[0] - px * width + crack.nx * normalOffset,
                 crack.start[1] - py * width + crack.ny * normalOffset,
@@ -1848,42 +1847,10 @@ public final class TimeEraseFractureEffect {
                 crack.end[1] + py * width + crack.ny * normalOffset,
                 crack.end[2] + pz * width + crack.nz * normalOffset
         };
-        emitCrackTriangle(consumer, matrix, normalMatrix,
-                leftStart, rightStart, rightEnd, red, green, blue, alpha,
-                crack.nx, crack.ny, crack.nz);
-        emitCrackTriangle(consumer, matrix, normalMatrix,
-                leftStart, rightEnd, leftEnd, red, green, blue, alpha,
-                crack.nx, crack.ny, crack.nz);
-    }
-
-    private static void emitCrackTriangle(VertexConsumer consumer, Matrix4f matrix,
-                                          org.joml.Matrix3f normalMatrix,
-                                          float[] a, float[] b, float[] c,
-                                          int red, int green, int blue, int alpha,
-                                          float nx, float ny, float nz) {
-        emitCrackVertex(consumer, matrix, normalMatrix, a, 0.0F, 0.0F,
-                red, green, blue, alpha, nx, ny, nz);
-        emitCrackVertex(consumer, matrix, normalMatrix, b, 1.0F, 0.0F,
-                red, green, blue, alpha, nx, ny, nz);
-        emitCrackVertex(consumer, matrix, normalMatrix, c, 1.0F, 1.0F,
-                red, green, blue, alpha, nx, ny, nz);
-        // entityTranslucent is a QUADS consumer; the repeated vertex completes
-        // this triangle without bleeding into the next triangle in the batch.
-        emitCrackVertex(consumer, matrix, normalMatrix, c, 1.0F, 1.0F,
-                red, green, blue, alpha, nx, ny, nz);
-    }
-
-    private static void emitCrackVertex(VertexConsumer consumer, Matrix4f matrix,
-                                        org.joml.Matrix3f normalMatrix, float[] point,
-                                        float u, float v, int red, int green, int blue,
-                                        int alpha, float nx, float ny, float nz) {
-        consumer.vertex(matrix, point[0], point[1], point[2])
-                .color(red, green, blue, alpha)
-                .uv(u, v)
-                .overlayCoords(OverlayTexture.NO_OVERLAY)
-                .uv2(LightTexture.FULL_BRIGHT)
-                .normal(normalMatrix, nx, ny, nz)
-                .endVertex();
+        emitRockTriangle(consumer, matrix, normalMatrix, sprite,
+                leftStart, rightStart, rightEnd, color, alpha, crack.nx, crack.ny, crack.nz);
+        emitRockTriangle(consumer, matrix, normalMatrix, sprite,
+                leftStart, rightEnd, leftEnd, color, alpha, crack.nx, crack.ny, crack.nz);
     }
 
     private static void renderRocks(PoseStack poseStack,
@@ -1895,7 +1862,6 @@ public final class TimeEraseFractureEffect {
                 .getBlockModel(Blocks.STONE.defaultBlockState())
                 .getParticleIcon();
         VertexConsumer consumer = buffer.getBuffer(ROCK_RENDER_TYPE);
-        VertexConsumer crackConsumer = buffer.getBuffer(ROCK_CRACK_RENDER_TYPE);
 
         for (Rock rock : ROCKS) {
             float age = elapsedTicks + partialTick - SHATTER_TICK - rock.spawnDelay;
@@ -1990,16 +1956,15 @@ public final class TimeEraseFractureEffect {
                 }
 
                 for (RockCrack crack : rock.mesh.cracks) {
-                    emitRockCrack(crackConsumer, matrix, normalMatrix, crack, alphaByte);
+                    emitRockCrack(consumer, matrix, normalMatrix, stoneSprite, crack, alphaByte);
                 }
             } finally {
                 poseStack.popPose();
             }
         }
 
-        // Flush the opaque stone first, then its translucent crack grooves.
+        // Flush the complete rock mesh and its surface grooves together.
         buffer.endBatch(ROCK_RENDER_TYPE);
-        buffer.endBatch(ROCK_CRACK_RENDER_TYPE);
     }
 
     private static void emitRockTriangle(VertexConsumer consumer,

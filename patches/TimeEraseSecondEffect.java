@@ -473,79 +473,84 @@ public final class TimeEraseSecondEffect {
 
         double perpendicularX = -dz / length;
         double perpendicularZ = dx / length;
-        double outer = width * 2.05D;
-        double floorHalfWidth = width * 0.43D;
         int packedLight = getCrackLight(start);
 
-        // Face normals follow each fractured wall instead of pretending that
-        // every surface is a flat horizontal decal.
-        float leftNX = (float) (perpendicularX * 0.65D);
-        float leftNY = 0.76F;
-        float leftNZ = (float) (perpendicularZ * 0.65D);
+        // Irregular widths and edge heights break the clean ribbon silhouette.
+        double noise0 = 0.88D + 0.12D * Math.sin(start.x * 3.17D + start.z * 2.41D);
+        double noise1 = 0.88D + 0.12D * Math.sin(end.x * 3.17D + end.z * 2.41D);
+        double outer0 = width * (2.20D * noise0);
+        double outer1 = width * (2.20D * noise1);
+        double floor0 = width * (0.42D + 0.06D * Math.sin(start.x * 4.7D - start.z * 3.1D));
+        double floor1 = width * (0.42D + 0.06D * Math.sin(end.x * 4.7D - end.z * 3.1D));
+
+        // The visible floor stays just above the terrain depth buffer; the
+        // raised broken edges sit higher, making a readable recessed channel.
+        float edgeY0 = (float) (start.y - camera.y) + 0.092F
+                + (float) (0.018D * Math.sin(start.x * 2.3D + start.z * 1.7D));
+        float edgeY1 = (float) (end.y - camera.y) + 0.092F
+                + (float) (0.018D * Math.sin(end.x * 2.3D + end.z * 1.7D));
+        float floorY0 = (float) (start.y - camera.y) + 0.014F;
+        float floorY1 = (float) (end.y - camera.y) + 0.014F;
+
+        float leftNX = (float) (perpendicularX * 0.72D);
+        float wallNY = 0.69F;
+        float leftNZ = (float) (perpendicularZ * 0.72D);
         float rightNX = -leftNX;
-        float rightNY = leftNY;
         float rightNZ = -leftNZ;
 
-        float topY0 = (float) (start.y - camera.y) + 0.004F;
-        float topY1 = (float) (end.y - camera.y) + 0.004F;
-        float floorY0 = (float) (start.y - camera.y) - 0.170F;
-        float floorY1 = (float) (end.y - camera.y) - 0.170F;
-        float lipY0 = (float) (start.y - camera.y) + 0.027F;
-        float lipY1 = (float) (end.y - camera.y) + 0.027F;
+        float leftOuterX0 = (float) (start.x - camera.x + perpendicularX * outer0);
+        float leftOuterZ0 = (float) (start.z - camera.z + perpendicularZ * outer0);
+        float leftOuterX1 = (float) (end.x - camera.x + perpendicularX * outer1);
+        float leftOuterZ1 = (float) (end.z - camera.z + perpendicularZ * outer1);
+        float leftFloorX0 = (float) (start.x - camera.x + perpendicularX * floor0);
+        float leftFloorZ0 = (float) (start.z - camera.z + perpendicularZ * floor0);
+        float leftFloorX1 = (float) (end.x - camera.x + perpendicularX * floor1);
+        float leftFloorZ1 = (float) (end.z - camera.z + perpendicularZ * floor1);
 
-        float leftOuterX0 = (float) (start.x - camera.x + perpendicularX * outer);
-        float leftOuterZ0 = (float) (start.z - camera.z + perpendicularZ * outer);
-        float leftOuterX1 = (float) (end.x - camera.x + perpendicularX * outer);
-        float leftOuterZ1 = (float) (end.z - camera.z + perpendicularZ * outer);
-        float leftFloorX0 = (float) (start.x - camera.x + perpendicularX * floorHalfWidth);
-        float leftFloorZ0 = (float) (start.z - camera.z + perpendicularZ * floorHalfWidth);
-        float leftFloorX1 = (float) (end.x - camera.x + perpendicularX * floorHalfWidth);
-        float leftFloorZ1 = (float) (end.z - camera.z + perpendicularZ * floorHalfWidth);
+        float rightOuterX0 = (float) (start.x - camera.x - perpendicularX * outer0);
+        float rightOuterZ0 = (float) (start.z - camera.z - perpendicularZ * outer0);
+        float rightOuterX1 = (float) (end.x - camera.x - perpendicularX * outer1);
+        float rightOuterZ1 = (float) (end.z - camera.z - perpendicularZ * outer1);
+        float rightFloorX0 = (float) (start.x - camera.x - perpendicularX * floor0);
+        float rightFloorZ0 = (float) (start.z - camera.z - perpendicularZ * floor0);
+        float rightFloorX1 = (float) (end.x - camera.x - perpendicularX * floor1);
+        float rightFloorZ1 = (float) (end.z - camera.z - perpendicularZ * floor1);
 
-        float rightOuterX0 = (float) (start.x - camera.x - perpendicularX * outer);
-        float rightOuterZ0 = (float) (start.z - camera.z - perpendicularZ * outer);
-        float rightOuterX1 = (float) (end.x - camera.x - perpendicularX * outer);
-        float rightOuterZ1 = (float) (end.z - camera.z - perpendicularZ * outer);
-        float rightFloorX0 = (float) (start.x - camera.x - perpendicularX * floorHalfWidth);
-        float rightFloorZ0 = (float) (start.z - camera.z - perpendicularZ * floorHalfWidth);
-        float rightFloorX1 = (float) (end.x - camera.x - perpendicularX * floorHalfWidth);
-        float rightFloorZ1 = (float) (end.z - camera.z - perpendicularZ * floorHalfWidth);
-
-        // Left wall: a raised broken edge slopes into the recessed channel.
-        emitGroundVertex(consumer, matrix, leftOuterX0, topY0, leftOuterZ0,
-                0.0F, 0.0F, 76, 66, 58, 225, packedLight, leftNX, leftNY, leftNZ);
+        // Left broken wall slopes from a raised lip into the dark channel.
+        emitGroundVertex(consumer, matrix, leftOuterX0, edgeY0, leftOuterZ0,
+                0.0F, 0.0F, 88, 76, 66, 245, packedLight, leftNX, wallNY, leftNZ);
         emitGroundVertex(consumer, matrix, leftFloorX0, floorY0, leftFloorZ0,
-                0.0F, 1.0F, 24, 20, 20, 240, packedLight, leftNX, leftNY, leftNZ);
+                0.0F, 1.0F, 38, 31, 29, 250, packedLight, leftNX, wallNY, leftNZ);
         emitGroundVertex(consumer, matrix, leftFloorX1, floorY1, leftFloorZ1,
-                1.0F, 1.0F, 24, 20, 20, 240, packedLight, leftNX, leftNY, leftNZ);
-        emitGroundVertex(consumer, matrix, leftOuterX1, topY1, leftOuterZ1,
-                1.0F, 0.0F, 76, 66, 58, 225, packedLight, leftNX, leftNY, leftNZ);
+                1.0F, 1.0F, 38, 31, 29, 250, packedLight, leftNX, wallNY, leftNZ);
+        emitGroundVertex(consumer, matrix, leftOuterX1, edgeY1, leftOuterZ1,
+                1.0F, 0.0F, 88, 76, 66, 245, packedLight, leftNX, wallNY, leftNZ);
 
-        // Dark floor sits 17 cm below the surface and receives top-facing light.
+        // Recessed centre is deliberately opaque and darker than both bevels.
         emitGroundVertex(consumer, matrix, leftFloorX0, floorY0, leftFloorZ0,
-                0.0F, 0.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
+                0.0F, 0.0F, 7, 6, 8, 255, packedLight, 0.0F, 1.0F, 0.0F);
         emitGroundVertex(consumer, matrix, rightFloorX0, floorY0, rightFloorZ0,
-                1.0F, 0.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
+                1.0F, 0.0F, 7, 6, 8, 255, packedLight, 0.0F, 1.0F, 0.0F);
         emitGroundVertex(consumer, matrix, rightFloorX1, floorY1, rightFloorZ1,
-                1.0F, 1.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
+                1.0F, 1.0F, 7, 6, 8, 255, packedLight, 0.0F, 1.0F, 0.0F);
         emitGroundVertex(consumer, matrix, leftFloorX1, floorY1, leftFloorZ1,
-                0.0F, 1.0F, 8, 7, 10, 250, packedLight, 0.0F, 1.0F, 0.0F);
+                0.0F, 1.0F, 7, 6, 8, 255, packedLight, 0.0F, 1.0F, 0.0F);
 
-        // Right wall faces inward as a distinct slanted surface.
+        // Right wall has its own inward-facing normal and shadow gradient.
         emitGroundVertex(consumer, matrix, rightFloorX0, floorY0, rightFloorZ0,
-                0.0F, 0.0F, 24, 20, 20, 240, packedLight, rightNX, rightNY, rightNZ);
-        emitGroundVertex(consumer, matrix, rightOuterX0, topY0, rightOuterZ0,
-                0.0F, 1.0F, 76, 66, 58, 225, packedLight, rightNX, rightNY, rightNZ);
-        emitGroundVertex(consumer, matrix, rightOuterX1, topY1, rightOuterZ1,
-                1.0F, 1.0F, 76, 66, 58, 225, packedLight, rightNX, rightNY, rightNZ);
+                0.0F, 0.0F, 38, 31, 29, 250, packedLight, rightNX, wallNY, rightNZ);
+        emitGroundVertex(consumer, matrix, rightOuterX0, edgeY0, rightOuterZ0,
+                0.0F, 1.0F, 88, 76, 66, 245, packedLight, rightNX, wallNY, rightNZ);
+        emitGroundVertex(consumer, matrix, rightOuterX1, edgeY1, rightOuterZ1,
+                1.0F, 1.0F, 88, 76, 66, 245, packedLight, rightNX, wallNY, rightNZ);
         emitGroundVertex(consumer, matrix, rightFloorX1, floorY1, rightFloorZ1,
-                1.0F, 0.0F, 24, 20, 20, 240, packedLight, rightNX, rightNY, rightNZ);
+                1.0F, 0.0F, 38, 31, 29, 250, packedLight, rightNX, wallNY, rightNZ);
 
-        // A narrow uneven lip catches only the local light, not full-bright light.
+        // Two narrow, uneven rim highlights replace the old broad strip that
+        // covered the opening and made it read as a flat painted line.
         emitGroundLip(consumer, matrix, camera, start, end,
-                perpendicularX, perpendicularZ, outer * 0.95D,
-                (topY0 + topY1) * 0.5F + 0.023F, 132, 115, 100, 145,
-                packedLight);
+                perpendicularX, perpendicularZ, (outer0 + outer1) * 0.5D * 0.96D,
+                (edgeY0 + edgeY1) * 0.5F + 0.012F, 148, 129, 108, 165, packedLight);
     }
 
     private static int getCrackLight(Vec3 sample) {
@@ -586,16 +591,43 @@ public final class TimeEraseSecondEffect {
                                       double halfWidth, float yOffset,
                                       int red, int green, int blue, int alpha,
                                       int packedLight) {
-        double thin = halfWidth * 0.16D;
-        float nx = (float) (px * 0.65D);
-        float ny = 0.76F;
-        float nz = (float) (pz * 0.65D);
-        emitGroundQuad(consumer, matrix, camera, start, end,
-                px, pz, halfWidth, yOffset, red, green, blue, alpha,
-                packedLight, nx, ny, nz);
-        emitGroundQuad(consumer, matrix, camera, start, end,
-                px, pz, thin, yOffset + 0.001F, red / 2, green / 2, blue / 2, alpha,
-                packedLight, nx, ny, nz);
+        double lipHalf = Math.max(0.012D, halfWidth * 0.055D);
+        float nx = (float) (px * 0.72D);
+        float ny = 0.69F;
+        float nz = (float) (pz * 0.72D);
+        emitGroundEdgeRibbon(consumer, matrix, camera, start, end, px, pz,
+                halfWidth - lipHalf, halfWidth + lipHalf, yOffset,
+                red, green, blue, alpha, packedLight, nx, ny, nz);
+        emitGroundEdgeRibbon(consumer, matrix, camera, start, end, px, pz,
+                -halfWidth - lipHalf, -halfWidth + lipHalf, yOffset,
+                red, green, blue, alpha, packedLight, -nx, ny, -nz);
+    }
+
+    private static void emitGroundEdgeRibbon(VertexConsumer consumer, Matrix4f matrix,
+                                             Vec3 camera, Vec3 start, Vec3 end,
+                                             double px, double pz, double innerOffset,
+                                             double outerOffset, float yOffset,
+                                             int red, int green, int blue, int alpha,
+                                             int packedLight, float normalX, float normalY,
+                                             float normalZ) {
+        float y0 = (float) (start.y - camera.y) + yOffset;
+        float y1 = (float) (end.y - camera.y) + yOffset;
+        float ax = (float) (start.x - camera.x + px * innerOffset);
+        float az = (float) (start.z - camera.z + pz * innerOffset);
+        float bx = (float) (start.x - camera.x + px * outerOffset);
+        float bz = (float) (start.z - camera.z + pz * outerOffset);
+        float cx = (float) (end.x - camera.x + px * outerOffset);
+        float cz = (float) (end.z - camera.z + pz * outerOffset);
+        float dx = (float) (end.x - camera.x + px * innerOffset);
+        float dz = (float) (end.z - camera.z + pz * innerOffset);
+        emitGroundVertex(consumer, matrix, ax, y0, az, 0.0F, 0.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
+        emitGroundVertex(consumer, matrix, bx, y0, bz, 1.0F, 0.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
+        emitGroundVertex(consumer, matrix, cx, y1, cz, 1.0F, 1.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
+        emitGroundVertex(consumer, matrix, dx, y1, dz, 0.0F, 1.0F,
+                red, green, blue, alpha, packedLight, normalX, normalY, normalZ);
     }
 
     private static void emitGroundVertex(VertexConsumer consumer, Matrix4f matrix,

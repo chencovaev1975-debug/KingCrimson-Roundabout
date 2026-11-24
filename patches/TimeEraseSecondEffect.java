@@ -43,7 +43,7 @@ import java.util.Random;
  * collision, entity positions, or server state.
  */
 public final class TimeEraseSecondEffect {
-    private static final long MAIN_DURATION_NANOS = 14_884_063_000L;
+    private static final long MAIN_DURATION_NANOS = 14_884_014_000L;
 
     private static final double SLAB_LAUNCH_SECONDS = 2.78D;
     private static final double MAIN_AUDIO_DELAY_SECONDS = 3.55D;
@@ -231,17 +231,26 @@ public final class TimeEraseSecondEffect {
         if (!active || startNanos == 0L) return;
 
         double t = elapsedSeconds() + partialTick / 20.0D;
-        if (t < 1.20D || t > 3.55D) return;
+        if (t < 0.18D || t > 3.55D) return;
 
-        double rise = smoothstep((t - 1.20D) / 1.15D);
-        double decay = 1.0D - smoothstep((t - 2.86D) / 0.69D);
-        double envelope = rise * decay;
-        double burst = t >= 2.72D ? 1.0D : 0.52D;
-        double amplitude = 0.035D + 0.22D * envelope * burst;
+        // Small tremors begin with the first forward fissure; the left/right
+        // split adds a stronger rumble, then the slab eruption creates the peak.
+        double firstCrack = t < 1.13D
+                ? Math.sin(t * 52.0D + 0.4D)
+                * 0.022D * (1.0D - smoothstep((t - 0.76D) / 0.37D))
+                : 0.0D;
+        double branchEnvelope = smoothstep((t - 1.13D) / 0.38D)
+                * (1.0D - smoothstep((t - 2.82D) / 0.60D));
+        double branchingRumble = Math.sin(t * 69.0D + 0.4D)
+                * 0.062D * branchEnvelope;
+        double eruptionEnvelope = t >= 2.72D
+                ? Math.exp(-(t - 2.72D) * 3.7D) : 0.0D;
+        double eruption = Math.sin(t * 83.0D + 1.1D) * 0.235D * eruptionEnvelope;
+        double amplitude = firstCrack + branchingRumble + eruption;
 
-        cameraShakeX = Math.sin(t * 69.0D + 0.4D) * amplitude * 0.62D;
-        cameraShakeY = Math.sin(t * 83.0D + 1.1D) * amplitude;
-        cameraShakeZ = Math.sin(t * 57.0D + 2.0D) * amplitude * 0.16D;
+        cameraShakeX = amplitude * Math.sin(t * 17.0D + 0.7D) * 0.70D;
+        cameraShakeY = amplitude * 1.08D;
+        cameraShakeZ = amplitude * Math.sin(t * 23.0D + 2.0D) * 0.32D;
         poseStack.translate(cameraShakeX, cameraShakeY, cameraShakeZ);
     }
 
@@ -461,20 +470,68 @@ public final class TimeEraseSecondEffect {
 
         double perpendicularX = -dz / length;
         double perpendicularZ = dx / length;
-        float outer = width * 1.65F;
-        float inner = width * 0.46F;
-        float midY = (float) ((start.y + end.y) * 0.5D);
+        double outer = width * 1.70D;
+        double floorHalfWidth = width * 0.30D;
 
-        // Uneven bevel, two dark sloped shoulders, then a narrow recessed core.
-        emitGroundQuad(consumer, matrix, camera,
-                start, end, perpendicularX, perpendicularZ, outer,
-                midY + 0.012F, 62, 53, 48, 210);
-        emitGroundQuad(consumer, matrix, camera,
-                start, end, perpendicularX, perpendicularZ, inner,
-                midY + 0.006F, 13, 11, 14, 245);
+        float topY0 = (float) (start.y - camera.y) + 0.004F;
+        float topY1 = (float) (end.y - camera.y) + 0.004F;
+        float floorY0 = (float) (start.y - camera.y) - 0.052F;
+        float floorY1 = (float) (end.y - camera.y) - 0.052F;
+        float lipY0 = (float) (start.y - camera.y) + 0.027F;
+        float lipY1 = (float) (end.y - camera.y) + 0.027F;
+
+        float leftOuterX0 = (float) (start.x - camera.x + perpendicularX * outer);
+        float leftOuterZ0 = (float) (start.z - camera.z + perpendicularZ * outer);
+        float leftOuterX1 = (float) (end.x - camera.x + perpendicularX * outer);
+        float leftOuterZ1 = (float) (end.z - camera.z + perpendicularZ * outer);
+        float leftFloorX0 = (float) (start.x - camera.x + perpendicularX * floorHalfWidth);
+        float leftFloorZ0 = (float) (start.z - camera.z + perpendicularZ * floorHalfWidth);
+        float leftFloorX1 = (float) (end.x - camera.x + perpendicularX * floorHalfWidth);
+        float leftFloorZ1 = (float) (end.z - camera.z + perpendicularZ * floorHalfWidth);
+
+        float rightOuterX0 = (float) (start.x - camera.x - perpendicularX * outer);
+        float rightOuterZ0 = (float) (start.z - camera.z - perpendicularZ * outer);
+        float rightOuterX1 = (float) (end.x - camera.x - perpendicularX * outer);
+        float rightOuterZ1 = (float) (end.z - camera.z - perpendicularZ * outer);
+        float rightFloorX0 = (float) (start.x - camera.x - perpendicularX * floorHalfWidth);
+        float rightFloorZ0 = (float) (start.z - camera.z - perpendicularZ * floorHalfWidth);
+        float rightFloorX1 = (float) (end.x - camera.x - perpendicularX * floorHalfWidth);
+        float rightFloorZ1 = (float) (end.z - camera.z - perpendicularZ * floorHalfWidth);
+
+        // The two side walls slope down into a floor below the terrain surface.
+        emitGroundVertex(consumer, matrix, leftOuterX0, topY0, leftOuterZ0,
+                0.0F, 0.0F, 76, 66, 58, 225);
+        emitGroundVertex(consumer, matrix, leftFloorX0, floorY0, leftFloorZ0,
+                0.0F, 1.0F, 24, 20, 20, 240);
+        emitGroundVertex(consumer, matrix, leftFloorX1, floorY1, leftFloorZ1,
+                1.0F, 1.0F, 24, 20, 20, 240);
+        emitGroundVertex(consumer, matrix, leftOuterX1, topY1, leftOuterZ1,
+                1.0F, 0.0F, 76, 66, 58, 225);
+
+        // Dark recessed centre. The negative height offset makes the groove
+        // visibly lower than the block top instead of a decal laid over it.
+        emitGroundVertex(consumer, matrix, leftFloorX0, floorY0, leftFloorZ0,
+                0.0F, 0.0F, 8, 7, 10, 250);
+        emitGroundVertex(consumer, matrix, rightFloorX0, floorY0, rightFloorZ0,
+                1.0F, 0.0F, 8, 7, 10, 250);
+        emitGroundVertex(consumer, matrix, rightFloorX1, floorY1, rightFloorZ1,
+                1.0F, 1.0F, 8, 7, 10, 250);
+        emitGroundVertex(consumer, matrix, leftFloorX1, floorY1, leftFloorZ1,
+                0.0F, 1.0F, 8, 7, 10, 250);
+
+        emitGroundVertex(consumer, matrix, rightFloorX0, floorY0, rightFloorZ0,
+                0.0F, 0.0F, 24, 20, 20, 240);
+        emitGroundVertex(consumer, matrix, rightOuterX0, topY0, rightOuterZ0,
+                0.0F, 1.0F, 76, 66, 58, 225);
+        emitGroundVertex(consumer, matrix, rightOuterX1, topY1, rightOuterZ1,
+                1.0F, 1.0F, 76, 66, 58, 225);
+        emitGroundVertex(consumer, matrix, rightFloorX1, floorY1, rightFloorZ1,
+                1.0F, 0.0F, 24, 20, 20, 240);
+
+        // A narrow uneven lip catches light on both fractured edges.
         emitGroundLip(consumer, matrix, camera, start, end,
-                perpendicularX, perpendicularZ, outer * 0.90D,
-                midY + 0.024F, 112, 98, 86, 155);
+                perpendicularX, perpendicularZ, outer * 0.95D,
+                (topY0 + topY1) * 0.5F + 0.023F, 132, 115, 100, 145);
     }
 
     private static void emitGroundQuad(VertexConsumer consumer, Matrix4f matrix, Vec3 camera,

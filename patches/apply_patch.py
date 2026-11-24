@@ -729,6 +729,14 @@ for source_name, target_name in audio_targets.items():
     audio_source = assets_dir / source_name
     if audio_source.exists():
         audio_bytes = audio_source.read_bytes()
+    elif source_name in ("time_erase_second_intro.ogg", "time_erase_second_main.ogg"):
+        # TEMPORARY compile-test fallback only. Replace with the user's supplied
+        # clips before producing the final public build.
+        fallback = assets_dir / "JoJo_s-Bizarre-Adventure_-Golden-Wind-—-Diavolo-theme-_online-video-cutter.com_.ogg"
+        if not fallback.exists():
+            raise SystemExit(f"Missing required user audio resource: patches/assets/{source_name}")
+        audio_bytes = fallback.read_bytes()
+        print(f"WARNING: temporary B-scene audio fallback used for {source_name}; this is NOT the final sound.")
     else:
         raise SystemExit(f"Missing required user audio resource: patches/assets/{source_name}")
     if not audio_bytes.startswith(b"OggS"):

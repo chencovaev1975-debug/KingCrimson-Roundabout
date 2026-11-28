@@ -34,9 +34,12 @@ upstream change cannot silently skip a hook.
 - 2.60 s: short cross-fade to smaller splinters (2 per large chunk) with outward scatter, while
   the whole view shakes (pose offset 0.115 blocks, decaying after 3.55 s).
 - 4.00–4.90 s: splinters scale down, fade out and drift upward, then the state is cleared.
-- Geometry: recursive guillotine split of the block volume + per-corner jitter; six textured
-  faces per chunk from the block's own `getParticleIcon()` sprite, vanilla-like face shading,
-  `RenderType.entityTranslucent(atlas)` with alpha for the dissolve, `LightTexture.FULL_BRIGHT`.
+- Geometry: recursive guillotine split of the block volume, per-corner jitter (±0.045), a shear
+  of up to ±0.24 around the piece centre (faces stop being axis aligned) and 0–2 corner folds
+  that collapse quads into triangular faces, so a piece is a broken wedge and not a small cube.
+  Six faces per chunk, textured from the block's own `getParticleIcon()` sprite, vanilla-like
+  face shading, `RenderType.entityTranslucent(atlas)` with alpha for the dissolve,
+  `LightTexture.FULL_BRIGHT`.
 - The effect is dropped immediately if the level changes, or if it was started during Time
   Erase and the ability ends.
 

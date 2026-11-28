@@ -18,20 +18,26 @@ ability changes). The timeline uses real client time, so it is identical at any 
 
 | Time | What happens |
 | --- | --- |
-| 1.10 s | A very wide, bright-pink band sweeps bottom to top across the whole screen over 0.35 s. |
-| 2.00 s | Surface blocks and trees within 15 blocks break into large and medium chaotic 3D fragments that keep the original block textures. The pieces pull apart slightly in place and begin a barely visible up/down levitation. |
-| 2.60 s | The same pieces start shaking hard and split into much smaller splinters. |
+| 1.10 s | A very wide, bright-pink band sweeps bottom to top across the whole screen over 0.20 s. |
+| 2.00 s | Every surface block and tree within 15 blocks is cut into real 3D chunks: the block volume is split into irregular large/medium pieces that keep that block's own texture. The pieces pull apart slightly in place and begin a barely visible up/down levitation. |
+| 2.60 s | The pieces splinter into much smaller chunks, and the screen itself starts shaking hard. |
 | 4.00 s | All small splinters smoothly shrink and drift away, leaving only the dark starry cosmos. |
 | 4.90 s | Effect state is cleared. |
 
 Implementation notes:
 
-- On the key press the client snapshots up to 520 exposed blocks in a 15-block radius,
-  ±10 blocks vertically, using deterministic reservoir sampling so repeated presses look the
-  same and the scan stays cheap. Block states are only read, never written.
-- Every fragment is rendered as a scaled, textured copy of its own block model
-  (`BlockRenderDispatcher#renderSingleBlock`), so grass, dirt, sand, logs and leaves all keep
-  their real textures and lightmap.
+- On the key press the client snapshots **every** exposed block in a 15-block radius
+  (±15 blocks vertically) — no sampling, nothing is dropped, so no holes appear. Block states
+  are only read, never written. The only cap is a 6000-block safety net far above a normal
+  snapshot.
+- Fragments are real geometry, not miniature copies of the block: each block volume is cut by a
+  recursive guillotine split into irregular pieces, every corner is jittered, and the resulting
+  3D chunk is drawn with six textured faces taken from that block's own texture sprite with
+  vanilla-like face shading. Large chunks are split again into the smaller splinters of the
+  2.60 s beat.
+- The shake of the 2.60 s beat is a **camera-style shake of the whole view** (pose offset applied
+  at the head of the level render and undone at the tail); the fragments themselves no longer
+  jitter.
 - Before 2.00 s the snapshotted blocks stand in for the hidden chunks, so the world does not
   visibly pop when Time Erase hides the terrain.
 - The whole effect is bounded and frame-rate driven; nothing is stored per tick and nothing

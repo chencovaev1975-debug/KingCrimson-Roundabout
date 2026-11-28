@@ -19,8 +19,8 @@ ability changes). The timeline uses real client time, so it is identical at any 
 | Time | What happens |
 | --- | --- |
 | 1.10 s | A very wide, bright-pink band sweeps bottom to top across the whole screen over 0.20 s. |
-| 2.00 s | Every surface block and tree within 15 blocks is cut into real 3D chunks: the block volume is split into irregular large/medium pieces that keep that block's own texture. The pieces pull apart slightly in place and begin a barely visible up/down levitation. |
-| 2.60 s | The pieces splinter into much smaller chunks, and the screen itself starts shaking hard. |
+| 2.00 s | Nearby blocks break into a small number of large debris chunks of very different shapes and sizes — a few huge multi-block pieces plus some small ones. They keep the block's own texture, open only a hairline gap and stay exactly where they were, with a barely visible hover. |
+| 2.60 s | Each chunk cracks in two, and the whole view shakes gently. |
 | 4.00 s | All small splinters smoothly shrink and drift away, leaving only the dark starry cosmos. |
 | 4.90 s | Effect state is cleared. |
 
@@ -30,12 +30,17 @@ Implementation notes:
   (±15 blocks vertically) — no sampling, nothing is dropped, so no holes appear. Block states
   are only read, never written. The only cap is a 6000-block safety net far above a normal
   snapshot.
-- Fragments are real geometry, not miniature copies of the block: each block volume is cut by a
-  recursive guillotine split into irregular pieces, every corner is jittered, each piece is
-  sheared around its own centre so no face stays parallel to the block faces, and corners are
-  then folded onto neighbours so quads collapse into triangles. The result is an angular wedge,
-  not a small cube, textured with that block's own sprite and vanilla-like face shading. Large
-  chunks are split again into the smaller splinters of the 2.60 s beat.
+- Debris is built from **clusters of neighbouring blocks of the same type** (up to 44 blocks), so
+  one chunk can be several blocks across instead of a single scaled-down cube. A cluster becomes
+  1–3 chunks depending on its size, and a 1-block cluster stays small debris — that is where the
+  mix of huge and small fragments comes from.
+- Every chunk is a cut, sheared and corner-folded piece of that volume: corners are jittered,
+  faces are sheared so none stay parallel to the block faces, and corners are folded onto their
+  neighbours so quads collapse into triangles. The result is an angular debris wedge, not a cube,
+  textured with that block's own sprite (tiled per block cell across the chunk surface) with
+  vanilla-like face shading.
+- Chunks never fly away when they break: they only open a hairline gap (10 % of their offset from
+  the cluster centre), rotate by ±3° over 0.6 s and hover by 0.012 blocks.
 - The shake of the 2.60 s beat is a **camera-style shake of the whole view** (pose offset applied
   at the head of the level render and undone at the tail); the fragments themselves no longer
   jitter.

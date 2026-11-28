@@ -28,18 +28,20 @@ upstream change cannot silently skip a hook.
   edge, inside the render hook — no per-tick state and no keybind registration are needed.
 - 1.10–1.30 s: 32 stacked translucent slices form one very wide pink band moving bottom to top.
 - 2.00 s: snapshot of **all** exposed blocks (15-block radius, ±15 Y, no sampling, 6000-block
-  safety net) is cut into 1–3 large chunks per block depending on distance (3 within 5.5 blocks,
-  2 within 10.5, otherwise 1).
-- 2.00–2.60 s: chunks separate slightly and hover with a small sine bob.
-- 2.60 s: short cross-fade to smaller splinters (2 per large chunk) with outward scatter, while
-  the whole view shakes (pose offset 0.115 blocks, decaying after 3.55 s).
+  safety net) is grouped into clusters of neighbouring blocks with the same state (≤44 blocks)
+  and each cluster is cut into 1–3 chunks (1 for ≤12 cells, 2 for ≤26, otherwise 3), so debris
+  sizes vary from single blocks to multi-block slabs.
+- 2.00–2.60 s: chunks open a hairline gap (10 % of their offset from the cluster centre),
+  rotate ±3° and hover by 0.012 blocks — they stay in place and never drift away.
+- 2.60 s: short cross-fade to two halves per chunk (a single-block chunk is cracked through its
+  own volume), plus a gentle view shake (pose offset 0.038 blocks, decaying after 3.55 s).
 - 4.00–4.90 s: splinters scale down, fade out and drift upward, then the state is cleared.
-- Geometry: recursive guillotine split of the block volume, per-corner jitter (±0.045), a shear
-  of up to ±0.24 around the piece centre (faces stop being axis aligned) and 0–2 corner folds
-  that collapse quads into triangular faces, so a piece is a broken wedge and not a small cube.
-  Six faces per chunk, textured from the block's own `getParticleIcon()` sprite, vanilla-like
-  face shading, `RenderType.entityTranslucent(atlas)` with alpha for the dissolve,
-  `LightTexture.FULL_BRIGHT`.
+- Geometry: chunk box = bounds of its block cells; per-corner jitter (7.5 % of the smallest
+  extent, capped at 0.26 blocks), shear of 11 % of that extent (faces stop being axis aligned)
+  and 0–2 corner folds that collapse quads into triangular faces. Six faces per chunk,
+  subdivided once per block cell so the sprite keeps tiling across a multi-block chunk, textured
+  from the block's own `getParticleIcon()` sprite with vanilla-like face shading,
+  `RenderType.entityTranslucent(atlas)` with alpha for the dissolve, `LightTexture.FULL_BRIGHT`.
 - The effect is dropped immediately if the level changes, or if it was started during Time
   Erase and the ability ends.
 

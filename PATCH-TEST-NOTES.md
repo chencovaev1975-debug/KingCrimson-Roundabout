@@ -10,7 +10,9 @@
    - world chunks stop rendering once the native Time Erase fade-in finished
      (`ClientUtil.isUsingTimeErase && ClientUtil.TimeErase >= ClientUtil.fadeTime`);
    - `VCosmicFragmentEffect.renderWorld(...)` is called right after the existing
-     `rdbt$renderTerrainFragments(...)` call in the sky pass, before `buffer.endBatch()`.
+     `rdbt$renderTerrainFragments(...)` call in the sky pass, before `buffer.endBatch()`;
+   - `VCosmicFragmentEffect.applyScreenShake(...)` at the head of `renderLevel` and
+     `VCosmicFragmentEffect.clearScreenShake(...)` at its tail (pose offset in/out).
 3. `common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java`
    - `VCosmicFragmentEffect.renderScreenOverlay(...)` is called at the head of
      `roundabout$renderHotbarMixin` for the pink sweep.
@@ -24,13 +26,17 @@ upstream change cannot silently skip a hook.
 
 - Key press (ability-four key, V by default) is detected from `KeyMapping#isDown()` on a rising
   edge, inside the render hook — no per-tick state and no keybind registration are needed.
-- 1.10–1.45 s: 32 stacked translucent slices form one very wide pink band moving bottom to top.
-- 2.00 s: snapshot (≤520 exposed blocks, 15-block radius, ±10 Y, reservoir sampled) is rendered
-  as 2–3 large fragments per block.
-- 2.00–2.60 s: fragments separate slightly and hover with a small sine bob.
-- 2.60 s: short cross-fade to smaller splinters (1–2 per large fragment) plus a three-axis
-  high-frequency shake and outward scatter.
-- 4.00–4.90 s: splinters scale to zero and drift upward, then the state is cleared.
+- 1.10–1.30 s: 32 stacked translucent slices form one very wide pink band moving bottom to top.
+- 2.00 s: snapshot of **all** exposed blocks (15-block radius, ±15 Y, no sampling, 6000-block
+  safety net) is cut into 1–3 large chunks per block depending on distance (3 within 5.5 blocks,
+  2 within 10.5, otherwise 1).
+- 2.00–2.60 s: chunks separate slightly and hover with a small sine bob.
+- 2.60 s: short cross-fade to smaller splinters (2 per large chunk) with outward scatter, while
+  the whole view shakes (pose offset 0.115 blocks, decaying after 3.55 s).
+- 4.00–4.90 s: splinters scale down, fade out and drift upward, then the state is cleared.
+- Geometry: recursive guillotine split of the block volume + per-corner jitter; six textured
+  faces per chunk from the block's own `getParticleIcon()` sprite, vanilla-like face shading,
+  `RenderType.entityTranslucent(atlas)` with alpha for the dissolve, `LightTexture.FULL_BRIGHT`.
 - The effect is dropped immediately if the level changes, or if it was started during Time
   Erase and the ability ends.
 
@@ -42,6 +48,7 @@ upstream change cannot silently skip a hook.
 - `patches/VCosmicFragmentEffect.java` passed a `javac` parse check (only expected
   "package does not exist" / "cannot find symbol" errors for Minecraft classes, no syntax
   errors).
+- All six patch points matched exactly once on the pinned sources.
 - Every Minecraft API used by the new class (`renderSingleBlock`, `RenderShape.MODEL`,
   `canOcclude`, `getFluidState`, `getMinBuildHeight`/`getMaxBuildHeight`, `GuiGraphics#fill`,
   `Util.getMillis`, `Mth.sin/clamp/floor`, `Camera#getPosition`, `LightTexture.FULL_BRIGHT`,

@@ -272,9 +272,9 @@ public final class VCosmicFragmentEffect {
         Matrix3f normalMatrix = poseStack.last().normal();
 
         float[] p = shard.corners;
-        float cx = shard.centerX;
-        float cy = shard.centerY;
-        float cz = shard.centerZ;
+        float ox = shard.cx;
+        float oy = shard.cy;
+        float oz = shard.cz;
 
         float u0 = sprite.getU0();
         float u1 = sprite.getU1();
@@ -293,24 +293,24 @@ public final class VCosmicFragmentEffect {
             float nz = FACE_NORMAL[face * 3 + 2];
             int axis = FACE_UV_AXIS[face];
 
-            vertex(consumer, matrix, normalMatrix, p, a, cx, cy, cz, u0, u1, v0, v1, axis,
+            vertex(consumer, matrix, normalMatrix, p, a, ox, oy, oz, u0, u1, v0, v1, axis,
                     shade, alpha, nx, ny, nz, light);
-            vertex(consumer, matrix, normalMatrix, p, b, cx, cy, cz, u0, u1, v0, v1, axis,
+            vertex(consumer, matrix, normalMatrix, p, b, ox, oy, oz, u0, u1, v0, v1, axis,
                     shade, alpha, nx, ny, nz, light);
-            vertex(consumer, matrix, normalMatrix, p, c, cx, cy, cz, u0, u1, v0, v1, axis,
+            vertex(consumer, matrix, normalMatrix, p, c, ox, oy, oz, u0, u1, v0, v1, axis,
                     shade, alpha, nx, ny, nz, light);
-            vertex(consumer, matrix, normalMatrix, p, d, cx, cy, cz, u0, u1, v0, v1, axis,
+            vertex(consumer, matrix, normalMatrix, p, d, ox, oy, oz, u0, u1, v0, v1, axis,
                     shade, alpha, nx, ny, nz, light);
         }
     }
 
     private static void vertex(VertexConsumer consumer, Matrix4f matrix, Matrix3f normalMatrix,
-                               float[] corners, int index, float cx, float cy, float cz,
+                               float[] corners, int index, float ox, float oy, float oz,
                                float u0, float u1, float v0, float v1, int axis,
                                float shade, float alpha, float nx, float ny, float nz, int light) {
-        float x = corners[index * 3] - cx;
-        float y = corners[index * 3 + 1] - cy;
-        float z = corners[index * 3 + 2] - cz;
+        float x = corners[index * 3] - ox;
+        float y = corners[index * 3 + 1] - oy;
+        float z = corners[index * 3 + 2] - oz;
 
         float uvU;
         float uvV;
@@ -692,9 +692,9 @@ public final class VCosmicFragmentEffect {
 
     private static final class Shard {
         final float[] corners;
-        final float centerX;
-        final float centerY;
-        final float centerZ;
+        final float cx;
+        final float cy;
+        final float cz;
         float pushX;
         float pushY;
         float pushZ;
@@ -704,13 +704,13 @@ public final class VCosmicFragmentEffect {
         final float phase;
         final float spin;
 
-        Shard(float[] corners, float centerX, float centerY, float centerZ,
+        Shard(float[] corners, float cx, float cy, float cz,
               float pushX, float pushY, float pushZ,
               float rx, float ry, float rz, float phase, float spin) {
             this.corners = corners;
-            this.centerX = centerX;
-            this.centerY = centerY;
-            this.centerZ = centerZ;
+            this.cx = cx;
+            this.cy = cy;
+            this.cz = cz;
             this.pushX = pushX;
             this.pushY = pushY;
             this.pushZ = pushZ;

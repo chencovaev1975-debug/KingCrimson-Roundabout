@@ -86,6 +86,32 @@ replace_once(
     "render the V-key cosmic fracture effect",
 )
 
+# The shake shakes the view, not the fragments: offset is applied at the head of
+# renderLevel (pose is still view aligned) and undone at the tail.
+replace_once(
+    renderer,
+    """        ClientUtil.mirrorCycles = 0;
+
+        roundabout$renderAnubisMemory($$1);""",
+    """        ClientUtil.mirrorCycles = 0;
+        VCosmicFragmentEffect.applyScreenShake($$0);
+
+        roundabout$renderAnubisMemory($$1);""",
+    "apply the screen shake at the head of the level render",
+)
+
+replace_once(
+    renderer,
+    """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
+
+    }""",
+    """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
+        VCosmicFragmentEffect.clearScreenShake($$0);
+
+    }""",
+    "undo the screen shake at the tail of the level render",
+)
+
 # ---------------------------------------------------------------------------
 # 4. Draw the wide bright-pink sweep as a HUD overlay.
 # ---------------------------------------------------------------------------

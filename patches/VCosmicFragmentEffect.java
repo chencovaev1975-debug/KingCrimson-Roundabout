@@ -22,23 +22,34 @@ import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * Client-only visual effect played when the ability-four key (V by default) is pressed.
  *
  * Timeline, in seconds of real client time from the key press:
  *   1.10 -> 1.30  a very wide bright-pink band sweeps bottom to top over the whole screen.
- *   2.00          every surface/tree block within 15 blocks is cut into real 3D chunks: each
- *                 block volume is split into irregular pieces that carry that block's texture.
- *                 The pieces pull apart slightly and start a barely visible levitation.
- *   2.60          the pieces splinter into much smaller chunks and the whole screen shakes.
- *   4.00 -> 4.90  the splinters shrink and drift away, leaving only the dark starry cosmos.
+ *   2.00          the nearby blocks break apart into a small number of large, differently shaped
+ *                 debris chunks (a few huge ones, some small ones). They stay exactly where they
+ *                 were: only a hairline gap opens up, plus a barely visible hover.
+ *   2.60          each chunk cracks in two and the whole screen shakes (gently).
+ *   4.00 -> 4.90  the debris shrinks, fades and drifts up, leaving only the starry cosmos.
  *
- * Nothing here writes to the world: block states are only read for the snapshot, no packets are
- * sent, and collision, entities and ability logic are untouched.
+ * Debris is built from clusters of neighbouring blocks of the same block type, so a single chunk
+ * can be several blocks across instead of being one scaled-down cube. Every chunk is a cut, sheared
+ * and corner-folded piece of that volume, textured with the block's own sprite.
+ *
+ * Nothing here writes to the world: block states are only read, no packets are sent, and collision,
+ * entities and ability logic are untouched.
  */
 public final class VCosmicFragmentEffect {
     /* ---- timeline, in seconds ---- */
@@ -53,10 +64,12 @@ public final class VCosmicFragmentEffect {
     /* ---- snapshot bounds ---- */
     private static final int RADIUS = 15;
     private static final int VERTICAL = 15;
-    /** Safety net only; a normal 15-block snapshot stays well below this. */
+    /** Safety net only; a normal 15-block snapshot stays below this. */
     private static final int HARD_LIMIT = 6000;
+    /** Upper size of one debris cluster, in blocks: this is what makes a chunk look huge. */
+    private static final int MAX_CLUSTER = 44;
 
-    private static final List<BlockRecord> BLOCKS = new ArrayList<>();
+    private static final List<Cluster> CLUSTERS = new ArrayList<>();
 
     private static boolean active;
     private static boolean keyWasDown;
@@ -108,7 +121,7 @@ public final class VCosmicFragmentEffect {
             stop();
             return;
         }
-        if (BLOCKS.isEmpty()) {
+        if (CLUSTERS.isEmpty()) {
             return;
         }
 
@@ -116,7 +129,6 @@ public final class VCosmicFragmentEffect {
         Vec3 view = minecraft.player.getViewVector(partialTick);
 
         if (time < SHATTER_TIME) {
-            // Before the fracture the snapshotted blocks stand in for the hidden chunks.
             if (worldHidden()) {
                 renderIntact(poseStack, buffer, cameraPos, view);
             }
@@ -124,9 +136,9 @@ public final class VCosmicFragmentEffect {
         }
 
         if (time < SHAKE_TIME) {
-            renderSpread(poseStack, buffer, cameraPos, view, time);
+            renderWholeChunks(poseStack, buffer, cameraPos, view, time);
         } else {
-            renderShattered(poseStack, buffer, cameraPos, view, time);
+            renderBrokenChunks(poseStack, buffer, cameraPos, view, time);
         }
     }
 
@@ -134,7 +146,6 @@ public final class VCosmicFragmentEffect {
         return ClientUtil.isUsingTimeErase && ClientUtil.TimeErase >= ClientUtil.fadeTime;
     }
 
-    /** Blocks behind the camera are skipped; they are a large part of the snapshot. */
     private static boolean behindCamera(Vec3 cameraPos, Vec3 view, double x, double y, double z) {
         double dx = x - cameraPos.x;
         double dy = y - cameraPos.y;
@@ -145,136 +156,134 @@ public final class VCosmicFragmentEffect {
     private static void renderIntact(PoseStack poseStack, MultiBufferSource buffer, Vec3 cameraPos,
                                      Vec3 view) {
         Minecraft minecraft = Minecraft.getInstance();
-        for (BlockRecord block : BLOCKS) {
-            if (behindCamera(cameraPos, view,
-                    block.pos.getX() + 0.5D, block.pos.getY() + 0.5D, block.pos.getZ() + 0.5D)) {
-                continue;
+        for (Cluster cluster : CLUSTERS) {
+            for (Piece piece : cluster.pieces) {
+                if (behindCamera(cameraPos, view, piece.cx, piece.cy, piece.cz)) {
+                    continue;
+                }
+                for (int[] cell : piece.cells) {
+                    poseStack.pushPose();
+                    poseStack.translate(
+                            cell[0] - cameraPos.x,
+                            cell[1] - cameraPos.y,
+                            cell[2] - cameraPos.z
+                    );
+                    minecraft.getBlockRenderer().renderSingleBlock(
+                            cluster.state,
+                            poseStack,
+                            buffer,
+                            LightTexture.FULL_BRIGHT,
+                            OverlayTexture.NO_OVERLAY
+                    );
+                    poseStack.popPose();
+                }
             }
-            poseStack.pushPose();
-            poseStack.translate(
-                    block.pos.getX() - cameraPos.x,
-                    block.pos.getY() - cameraPos.y,
-                    block.pos.getZ() - cameraPos.z
-            );
-            minecraft.getBlockRenderer().renderSingleBlock(
-                    block.state,
-                    poseStack,
-                    buffer,
-                    LightTexture.FULL_BRIGHT,
-                    OverlayTexture.NO_OVERLAY
-            );
-            poseStack.popPose();
         }
     }
 
-    private static void renderSpread(PoseStack poseStack, MultiBufferSource buffer, Vec3 cameraPos,
-                                     Vec3 view, float time) {
+    /** 2.00 -> 2.60 s: the debris is already broken up, but it stays in place. */
+    private static void renderWholeChunks(PoseStack poseStack, MultiBufferSource buffer,
+                                          Vec3 cameraPos, Vec3 view, float time) {
         float spread = smooth((time - SHATTER_TIME) / (SHAKE_TIME - SHATTER_TIME));
 
-        for (BlockRecord block : BLOCKS) {
-            if (behindCamera(cameraPos, view,
-                    block.pos.getX() + 0.5D, block.pos.getY() + 0.5D, block.pos.getZ() + 0.5D)) {
-                continue;
-            }
-            for (Shard shard : block.large) {
-                float separate = 1.0F + 1.05F * spread;
-                float bob = 0.020F * Mth.sin(time * 2.4F + shard.phase);
+        for (Cluster cluster : CLUSTERS) {
+            for (Piece piece : cluster.pieces) {
+                if (behindCamera(cameraPos, view, piece.cx, piece.cy, piece.cz)) {
+                    continue;
+                }
+                // A hairline gap and a slow hover; the chunk does not travel anywhere.
+                float bob = 0.012F * Mth.sin(time * 1.9F + piece.phase);
 
                 poseStack.pushPose();
                 poseStack.translate(
-                        (float) (block.pos.getX() + shard.cx * separate + shard.pushX * spread
-                                - cameraPos.x),
-                        (float) (block.pos.getY() + shard.cy * separate + shard.pushY * spread
-                                + bob - cameraPos.y),
-                        (float) (block.pos.getZ() + shard.cz * separate + shard.pushZ * spread
-                                - cameraPos.z)
+                        (float) (piece.cx + piece.outX * spread + bob * 0.35F - cameraPos.x),
+                        (float) (piece.cy + piece.outY * spread + bob - cameraPos.y),
+                        (float) (piece.cz + piece.outZ * spread - cameraPos.z)
                 );
-                poseStack.mulPose(Axis.XP.rotationDegrees(shard.rx * 0.35F * spread));
-                poseStack.mulPose(Axis.YP.rotationDegrees(shard.ry * 0.35F * spread));
-                poseStack.mulPose(Axis.ZP.rotationDegrees(shard.rz * 0.35F * spread));
-                emitShard(buffer, poseStack, shard, block.sprite, 1.0F);
+                poseStack.mulPose(Axis.XP.rotationDegrees(piece.rx * spread));
+                poseStack.mulPose(Axis.YP.rotationDegrees(piece.ry * spread));
+                poseStack.mulPose(Axis.ZP.rotationDegrees(piece.rz * spread));
+                emitPiece(buffer, poseStack, cluster.sprite, piece, 1.0F);
                 poseStack.popPose();
             }
         }
     }
 
-    private static void renderShattered(PoseStack poseStack, MultiBufferSource buffer, Vec3 cameraPos,
-                                        Vec3 view, float time) {
-        float split = smooth((time - SHAKE_TIME) / 0.35F);
+    /** 2.60 -> 4.90 s: every chunk cracks in two, then the debris dissolves. */
+    private static void renderBrokenChunks(PoseStack poseStack, MultiBufferSource buffer,
+                                          Vec3 cameraPos, Vec3 view, float time) {
+        float split = smooth((time - SHAKE_TIME) / 0.30F);
         float dissolve = smooth((time - DISSOLVE_TIME) / (END_TIME - DISSOLVE_TIME));
         float alpha = 1.0F - dissolve;
-        float rise = dissolve * 0.55F;
-        float scale = 1.0F - 0.85F * dissolve;
+        float rise = dissolve * 0.35F;
+        float scale = 1.0F - 0.90F * dissolve;
 
         if (alpha <= 0.02F) {
             return;
         }
 
-        // The big chunks crumble away during the first moments of the split.
-        float residual = 1.0F - Mth.clamp((time - SHAKE_TIME) / 0.16F, 0.0F, 1.0F);
+        float residual = 1.0F - Mth.clamp((time - SHAKE_TIME) / 0.14F, 0.0F, 1.0F);
         if (residual > 0.02F) {
-            for (BlockRecord block : BLOCKS) {
-                if (behindCamera(cameraPos, view, block.pos.getX() + 0.5D,
-                        block.pos.getY() + 0.5D, block.pos.getZ() + 0.5D)) {
-                    continue;
-                }
-                for (Shard shard : block.large) {
+            for (Cluster cluster : CLUSTERS) {
+                for (Piece piece : cluster.pieces) {
+                    if (behindCamera(cameraPos, view, piece.cx, piece.cy, piece.cz)) {
+                        continue;
+                    }
                     poseStack.pushPose();
                     poseStack.translate(
-                            (float) (block.pos.getX() + shard.cx * 2.05F + shard.pushX * 2.0F
-                                    - cameraPos.x),
-                            (float) (block.pos.getY() + shard.cy * 2.05F + shard.pushY * 2.0F
-                                    - cameraPos.y),
-                            (float) (block.pos.getZ() + shard.cz * 2.05F + shard.pushZ * 2.0F
-                                    - cameraPos.z)
+                            (float) (piece.cx + piece.outX - cameraPos.x),
+                            (float) (piece.cy + piece.outY - cameraPos.y),
+                            (float) (piece.cz + piece.outZ - cameraPos.z)
                     );
                     poseStack.scale(residual, residual, residual);
-                    emitShard(buffer, poseStack, shard, block.sprite, 1.0F);
+                    poseStack.mulPose(Axis.XP.rotationDegrees(piece.rx));
+                    poseStack.mulPose(Axis.YP.rotationDegrees(piece.ry));
+                    poseStack.mulPose(Axis.ZP.rotationDegrees(piece.rz));
+                    emitPiece(buffer, poseStack, cluster.sprite, piece, 1.0F);
                     poseStack.popPose();
                 }
             }
         }
 
-        for (BlockRecord block : BLOCKS) {
-            if (behindCamera(cameraPos, view, block.pos.getX() + 0.5D,
-                    block.pos.getY() + 0.5D, block.pos.getZ() + 0.5D)) {
-                continue;
-            }
-            for (Shard shard : block.small) {
-                poseStack.pushPose();
-                poseStack.translate(
-                        (float) (block.pos.getX() + shard.cx * (1.0F + 1.4F * split)
-                                + shard.pushX * (0.35F + 0.65F * split) - cameraPos.x),
-                        (float) (block.pos.getY() + shard.cy * (1.0F + 1.4F * split)
-                                + shard.pushY * (0.35F + 0.65F * split) + rise - cameraPos.y),
-                        (float) (block.pos.getZ() + shard.cz * (1.0F + 1.4F * split)
-                                + shard.pushZ * (0.35F + 0.65F * split) - cameraPos.z)
-                );
-                poseStack.scale(scale, scale, scale);
-                poseStack.mulPose(Axis.XP.rotationDegrees(shard.rx * 0.6F * split
-                        + time * 26.0F * shard.spin));
-                poseStack.mulPose(Axis.YP.rotationDegrees(shard.ry * 0.6F * split
-                        + time * 19.0F * shard.spin));
-                emitShard(buffer, poseStack, shard, block.sprite, alpha);
-                poseStack.popPose();
+        for (Cluster cluster : CLUSTERS) {
+            for (Piece piece : cluster.pieces) {
+                if (behindCamera(cameraPos, view, piece.cx, piece.cy, piece.cz)) {
+                    continue;
+                }
+                for (Piece child : piece.children) {
+                    if (behindCamera(cameraPos, view, child.cx, child.cy, child.cz)) {
+                        continue;
+                    }
+                    float drift = 0.045F * split;
+                    poseStack.pushPose();
+                    poseStack.translate(
+                            (float) (child.cx + child.driftX * drift - cameraPos.x),
+                            (float) (child.cy + child.driftY * drift + rise - cameraPos.y),
+                            (float) (child.cz + child.driftZ * drift - cameraPos.z)
+                    );
+                    poseStack.scale(scale, scale, scale);
+                    poseStack.mulPose(Axis.XP.rotationDegrees(child.rx * 1.6F * split));
+                    poseStack.mulPose(Axis.YP.rotationDegrees(child.ry * 1.6F * split));
+                    poseStack.mulPose(Axis.ZP.rotationDegrees(child.rz * 1.6F * split));
+                    emitPiece(buffer, poseStack, cluster.sprite, child, alpha);
+                    poseStack.popPose();
+                }
             }
         }
     }
 
+    /* ---- chunk geometry ---- */
+
     /**
-     * Emits one irregular 3D chunk: six textured faces of a jittered box that was cut out of the
-     * block volume, with the block's own texture and vanilla-like face shading.
+     * Draws one debris chunk: the six faces of a cut, sheared and corner-folded box, textured with
+     * the block sprite. Faces are split per block cell so the texture keeps tiling across a chunk
+     * that is several blocks wide.
      */
-    private static void emitShard(MultiBufferSource buffer, PoseStack poseStack, Shard shard,
-                                 TextureAtlasSprite sprite, float alpha) {
+    private static void emitPiece(MultiBufferSource buffer, PoseStack poseStack,
+                                 TextureAtlasSprite sprite, Piece piece, float alpha) {
         VertexConsumer consumer = buffer.getBuffer(RenderType.entityTranslucent(sprite.atlasLocation()));
         Matrix4f matrix = poseStack.last().pose();
         Matrix3f normalMatrix = poseStack.last().normal();
-
-        float[] p = shard.corners;
-        float ox = shard.cx;
-        float oy = shard.cy;
-        float oz = shard.cz;
 
         float u0 = sprite.getU0();
         float u1 = sprite.getU1();
@@ -282,52 +291,59 @@ public final class VCosmicFragmentEffect {
         float v1 = sprite.getV1();
         int light = LightTexture.FULL_BRIGHT;
 
+        float[] c = piece.corners;
         for (int face = 0; face < 6; face++) {
             int a = FACE_A[face];
             int b = FACE_B[face];
-            int c = FACE_C[face];
             int d = FACE_D[face];
+            int e = FACE_E[face];
             float shade = FACE_SHADE[face];
             float nx = FACE_NORMAL[face * 3];
             float ny = FACE_NORMAL[face * 3 + 1];
             float nz = FACE_NORMAL[face * 3 + 2];
-            int axis = FACE_UV_AXIS[face];
+            int cellsU = piece.cellsU[face];
+            int cellsV = piece.cellsV[face];
 
-            vertex(consumer, matrix, normalMatrix, p, a, ox, oy, oz, u0, u1, v0, v1, axis,
-                    shade, alpha, nx, ny, nz, light);
-            vertex(consumer, matrix, normalMatrix, p, b, ox, oy, oz, u0, u1, v0, v1, axis,
-                    shade, alpha, nx, ny, nz, light);
-            vertex(consumer, matrix, normalMatrix, p, c, ox, oy, oz, u0, u1, v0, v1, axis,
-                    shade, alpha, nx, ny, nz, light);
-            vertex(consumer, matrix, normalMatrix, p, d, ox, oy, oz, u0, u1, v0, v1, axis,
-                    shade, alpha, nx, ny, nz, light);
+            for (int iu = 0; iu < cellsU; iu++) {
+                float uA = iu / (float) cellsU;
+                float uB = (iu + 1) / (float) cellsU;
+                for (int iv = 0; iv < cellsV; iv++) {
+                    float vA = iv / (float) cellsV;
+                    float vB = (iv + 1) / (float) cellsV;
+
+                    vertex(consumer, matrix, normalMatrix, c, a, b, d, e, piece,
+                            uA, vA, u0, u1, v0, v1, shade, alpha, nx, ny, nz, light);
+                    vertex(consumer, matrix, normalMatrix, c, a, b, d, e, piece,
+                            uB, vA, u0, u1, v0, v1, shade, alpha, nx, ny, nz, light);
+                    vertex(consumer, matrix, normalMatrix, c, a, b, d, e, piece,
+                            uB, vB, u0, u1, v0, v1, shade, alpha, nx, ny, nz, light);
+                    vertex(consumer, matrix, normalMatrix, c, a, b, d, e, piece,
+                            uA, vB, u0, u1, v0, v1, shade, alpha, nx, ny, nz, light);
+                }
+            }
         }
     }
 
+    /** Emits one vertex of a face cell, bilinearly interpolated across the four face corners. */
     private static void vertex(VertexConsumer consumer, Matrix4f matrix, Matrix3f normalMatrix,
-                               float[] corners, int index, float ox, float oy, float oz,
-                               float u0, float u1, float v0, float v1, int axis,
+                               float[] corners, int a, int b, int d, int e, Piece piece,
+                               float u, float v, float u0, float u1, float v0, float v1,
                                float shade, float alpha, float nx, float ny, float nz, int light) {
-        float x = corners[index * 3] - ox;
-        float y = corners[index * 3 + 1] - oy;
-        float z = corners[index * 3 + 2] - oz;
+        float wa = (1.0F - u) * (1.0F - v);
+        float wb = u * (1.0F - v);
+        float wd = u * v;
+        float we = (1.0F - u) * v;
 
-        float uvU;
-        float uvV;
-        if (axis == 0) {
-            uvU = corners[index * 3];
-            uvV = corners[index * 3 + 2];
-        } else if (axis == 1) {
-            uvU = corners[index * 3];
-            uvV = 1.0F - corners[index * 3 + 1];
-        } else {
-            uvU = corners[index * 3 + 2];
-            uvV = 1.0F - corners[index * 3 + 1];
-        }
+        float x = corners[a * 3] * wa + corners[b * 3] * wb
+                + corners[d * 3] * wd + corners[e * 3] * we - piece.cx;
+        float y = corners[a * 3 + 1] * wa + corners[b * 3 + 1] * wb
+                + corners[d * 3 + 1] * wd + corners[e * 3 + 1] * we - piece.cy;
+        float z = corners[a * 3 + 2] * wa + corners[b * 3 + 2] * wb
+                + corners[d * 3 + 2] * wd + corners[e * 3 + 2] * we - piece.cz;
 
         consumer.vertex(matrix, x, y, z)
                 .color(shade, shade, shade, alpha)
-                .uv(u0 + (u1 - u0) * uvU, v0 + (v1 - v0) * uvV)
+                .uv(u0 + (u1 - u0) * u, v0 + (v1 - v0) * (1.0F - v))
                 .overlayCoords(OverlayTexture.NO_OVERLAY)
                 .uv2(light)
                 .normal(normalMatrix, nx, ny, nz)
@@ -352,18 +368,18 @@ public final class VCosmicFragmentEffect {
         }
         float amplitude;
         if (time < SHAKE_HOLD_END) {
-            amplitude = 0.115F * Mth.clamp((time - SHAKE_TIME) / 0.12F, 0.0F, 1.0F);
+            amplitude = 0.038F * Mth.clamp((time - SHAKE_TIME) / 0.15F, 0.0F, 1.0F);
         } else {
-            amplitude = 0.115F * (1.0F - Mth.clamp(
+            amplitude = 0.038F * (1.0F - Mth.clamp(
                     (time - SHAKE_HOLD_END) / (DISSOLVE_TIME - SHAKE_HOLD_END), 0.0F, 1.0F));
         }
-        if (amplitude <= 0.0005F) {
+        if (amplitude <= 0.0004F) {
             return;
         }
 
         long millis = Util.getMillis();
-        shakeDx = amplitude * Mth.sin(millis * 0.075F);
-        shakeDy = amplitude * 0.85F * Mth.sin(millis * 0.098F + 1.9F);
+        shakeDx = amplitude * Mth.sin(millis * 0.071F);
+        shakeDy = amplitude * 0.8F * Mth.sin(millis * 0.093F + 1.9F);
         poseStack.translate(shakeDx, shakeDy, 0.0F);
         shakeApplied = true;
     }
@@ -451,7 +467,7 @@ public final class VCosmicFragmentEffect {
         cosmosAnchored = false;
         capturedLevel = null;
         shakeApplied = false;
-        BLOCKS.clear();
+        CLUSTERS.clear();
     }
 
     private static float elapsedSeconds() {
@@ -464,11 +480,11 @@ public final class VCosmicFragmentEffect {
     }
 
     /* ------------------------------------------------------------------ */
-    /* snapshot + fragment generation                                      */
+    /* snapshot: clusters of neighbouring blocks                           */
     /* ------------------------------------------------------------------ */
 
     private static void capture(Level level) {
-        BLOCKS.clear();
+        CLUSTERS.clear();
 
         int centerX = Mth.floor(originX);
         int centerY = Mth.floor(originY);
@@ -476,8 +492,8 @@ public final class VCosmicFragmentEffect {
         int minY = Math.max(level.getMinBuildHeight(), centerY - VERTICAL);
         int maxY = Math.min(level.getMaxBuildHeight() - 1, centerY + VERTICAL);
 
-        Random random = new Random((((long) centerX) << 32) ^ (((long) centerZ) << 7)
-                ^ centerY ^ 0x4B435632L);
+        Map<Long, BlockState> found = new HashMap<>();
+        int limit = RADIUS * RADIUS + RADIUS;
 
         for (int x = centerX - RADIUS; x <= centerX + RADIUS; x++) {
             int dx = x - centerX;
@@ -489,8 +505,11 @@ public final class VCosmicFragmentEffect {
                 }
                 for (int y = minY; y <= maxY; y++) {
                     int dy = y - centerY;
-                    if (dy * dy + flat > RADIUS * RADIUS + RADIUS) {
+                    if (dy * dy + flat > limit) {
                         continue;
+                    }
+                    if (found.size() >= HARD_LIMIT) {
+                        break;
                     }
                     BlockPos pos = new BlockPos(x, y, z);
                     BlockState state = level.getBlockState(pos);
@@ -500,16 +519,276 @@ public final class VCosmicFragmentEffect {
                     if (!isExposed(level, pos)) {
                         continue;
                     }
-                    if (BLOCKS.size() >= HARD_LIMIT) {
-                        break;
-                    }
-                    double distance = Math.sqrt(flat + (double) dy * dy);
-                    int large = distance <= 5.5D ? 3 : (distance <= 10.5D ? 2 : 1);
-                    BLOCKS.add(new BlockRecord(pos.immutable(), state,
-                            spriteOf(state), buildFragments(large, random)));
+                    found.put(pos.asLong(), state);
                 }
             }
         }
+
+        Random random = new Random((((long) centerX) << 32) ^ (((long) centerZ) << 7)
+                ^ centerY ^ 0x4B435633L);
+        Set<Long> visited = new HashSet<>();
+
+        for (Map.Entry<Long, BlockState> entry : found.entrySet()) {
+            long seed = entry.getKey();
+            if (visited.contains(seed)) {
+                continue;
+            }
+            BlockState state = entry.getValue();
+            List<BlockPos> cells = new ArrayList<>();
+            Deque<Long> queue = new ArrayDeque<>();
+            queue.add(seed);
+            visited.add(seed);
+
+            while (!queue.isEmpty() && cells.size() < MAX_CLUSTER) {
+                long key = queue.poll();
+                BlockPos pos = BlockPos.of(key);
+                cells.add(pos);
+                for (int face = 0; face < 6; face++) {
+                    BlockPos neighbour = pos.offset(
+                            face == 0 ? 1 : (face == 1 ? -1 : 0),
+                            face == 2 ? 1 : (face == 3 ? -1 : 0),
+                            face == 4 ? 1 : (face == 5 ? -1 : 0)
+                    );
+                    long neighbourKey = neighbour.asLong();
+                    if (visited.contains(neighbourKey)) {
+                        continue;
+                    }
+                    BlockState neighbourState = found.get(neighbourKey);
+                    if (neighbourState != null && neighbourState == state) {
+                        visited.add(neighbourKey);
+                        queue.add(neighbourKey);
+                    }
+                }
+            }
+
+            if (!cells.isEmpty()) {
+                buildCluster(state, cells, random);
+            }
+        }
+    }
+
+    private static void buildCluster(BlockState state, List<BlockPos> cells, Random random) {
+        Cluster cluster = new Cluster(state, spriteOf(state));
+
+        float clusterX = 0.0F;
+        float clusterY = 0.0F;
+        float clusterZ = 0.0F;
+        for (BlockPos pos : cells) {
+            clusterX += pos.getX() + 0.5F;
+            clusterY += pos.getY() + 0.5F;
+            clusterZ += pos.getZ() + 0.5F;
+        }
+        clusterX /= cells.size();
+        clusterY /= cells.size();
+        clusterZ /= cells.size();
+
+        int pieceCount = cells.size() <= 12 ? 1 : (cells.size() <= 26 ? 2 : 3);
+        for (List<BlockPos> group : partition(cells, pieceCount, random)) {
+            Piece piece = makePiece(group, random);
+            if (piece == null) {
+                continue;
+            }
+            piece.outX = (piece.cx - clusterX) * 0.10F;
+            piece.outY = (piece.cy - clusterY) * 0.10F;
+            piece.outZ = (piece.cz - clusterZ) * 0.10F;
+
+            List<List<BlockPos>> halves = partition(group, 2, random);
+            if (halves.size() < 2) {
+                // A one-block chunk still has to crack in two: cut its own volume instead.
+                for (float[] halfBox : splitBox(boundsOf(group), random)) {
+                    addChild(piece, makePieceFromBox(halfBox, random), random);
+                }
+            } else {
+                for (List<BlockPos> half : halves) {
+                    addChild(piece, makePiece(half, random), random);
+                }
+            }
+            cluster.pieces.add(piece);
+        }
+
+        if (!cluster.pieces.isEmpty()) {
+            CLUSTERS.add(cluster);
+        }
+    }
+
+    private static void addChild(Piece parent, Piece child, Random random) {
+        if (child == null) {
+            return;
+        }
+        child.outX = (child.cx - parent.cx) * 0.18F;
+        child.outY = (child.cy - parent.cy) * 0.18F;
+        child.outZ = (child.cz - parent.cz) * 0.18F;
+        child.driftX = randomBetween(random, -1.0F, 1.0F);
+        child.driftY = randomBetween(random, -0.3F, 1.0F);
+        child.driftZ = randomBetween(random, -1.0F, 1.0F);
+        float length = Math.max(0.001F, (float) Math.sqrt(
+                child.driftX * child.driftX + child.driftY * child.driftY
+                + child.driftZ * child.driftZ));
+        child.driftX /= length;
+        child.driftY /= length;
+        child.driftZ /= length;
+        parent.children.add(child);
+    }
+
+    /** Splits cells into contiguous groups along the longest axis, so pieces stay chunky. */
+    private static List<List<BlockPos>> partition(List<BlockPos> cells, int count, Random random) {
+        List<List<BlockPos>> groups = new ArrayList<>();
+        if (count <= 1 || cells.size() <= 1) {
+            groups.add(new ArrayList<>(cells));
+            return groups;
+        }
+
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+        for (BlockPos pos : cells) {
+            minX = Math.min(minX, pos.getX());
+            minY = Math.min(minY, pos.getY());
+            minZ = Math.min(minZ, pos.getZ());
+            maxX = Math.max(maxX, pos.getX());
+            maxY = Math.max(maxY, pos.getY());
+            maxZ = Math.max(maxZ, pos.getZ());
+        }
+        int sx = maxX - minX;
+        int sy = maxY - minY;
+        int sz = maxZ - minZ;
+        int axis = sx >= sy && sx >= sz ? 0 : (sy >= sz ? 1 : 2);
+
+        List<BlockPos> sorted = new ArrayList<>(cells);
+        final int sortAxis = axis;
+        sorted.sort(Comparator.comparingInt((BlockPos pos) -> sortAxis == 0 ? pos.getX()
+                : (sortAxis == 1 ? pos.getY() : pos.getZ())));
+
+        int perGroup = Math.max(1, Math.round(sorted.size() / (float) count));
+        for (int i = 0; i < sorted.size(); i += perGroup) {
+            groups.add(new ArrayList<>(sorted.subList(i, Math.min(sorted.size(), i + perGroup))));
+        }
+        return groups;
+    }
+
+    private static float[] boundsOf(List<BlockPos> cells) {
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+        for (BlockPos pos : cells) {
+            minX = Math.min(minX, pos.getX());
+            minY = Math.min(minY, pos.getY());
+            minZ = Math.min(minZ, pos.getZ());
+            maxX = Math.max(maxX, pos.getX());
+            maxY = Math.max(maxY, pos.getY());
+            maxZ = Math.max(maxZ, pos.getZ());
+        }
+        return new float[]{minX, minY, minZ, maxX + 1.0F, maxY + 1.0F, maxZ + 1.0F};
+    }
+
+    private static float[][] splitBox(float[] box, Random random) {
+        int axis = random.nextInt(3);
+        float t = 0.36F + random.nextFloat() * 0.28F;
+        float[] first = box.clone();
+        float[] second = box.clone();
+        if (axis == 0) {
+            float cut = box[0] + (box[3] - box[0]) * t;
+            first[3] = cut;
+            second[0] = cut;
+        } else if (axis == 1) {
+            float cut = box[1] + (box[4] - box[1]) * t;
+            first[4] = cut;
+            second[1] = cut;
+        } else {
+            float cut = box[2] + (box[5] - box[2]) * t;
+            first[5] = cut;
+            second[2] = cut;
+        }
+        return new float[][]{first, second};
+    }
+
+    private static Piece makePiece(List<BlockPos> cells, Random random) {
+        if (cells == null || cells.isEmpty()) {
+            return null;
+        }
+        Piece piece = makePieceFromBox(boundsOf(cells), random);
+        for (BlockPos cell : cells) {
+            piece.cells.add(new int[]{cell.getX(), cell.getY(), cell.getZ()});
+        }
+        return piece;
+    }
+
+    private static Piece makePieceFromBox(float[] box, Random random) {
+        float x0 = box[0];
+        float y0 = box[1];
+        float z0 = box[2];
+        float x1 = box[3];
+        float y1 = box[4];
+        float z1 = box[5];
+        float sizeX = x1 - x0;
+        float sizeY = y1 - y0;
+        float sizeZ = z1 - z0;
+
+        // Jitter and shear scale with the chunk, so a huge chunk stays coherent.
+        float smallest = Math.min(sizeX, Math.min(sizeY, sizeZ));
+        float jitter = Math.min(0.26F, 0.075F * smallest);
+        float shear = Math.min(0.30F, 0.11F * smallest);
+
+        float[] corners = new float[24];
+        int index = 0;
+        for (int z = 0; z < 2; z++) {
+            for (int y = 0; y < 2; y++) {
+                for (int x = 0; x < 2; x++) {
+                    corners[index * 3] = (x == 0 ? x0 : x1) + randomBetween(random, -jitter, jitter);
+                    corners[index * 3 + 1] = (y == 0 ? y0 : y1) + randomBetween(random, -jitter, jitter);
+                    corners[index * 3 + 2] = (z == 0 ? z0 : z1) + randomBetween(random, -jitter, jitter);
+                    index++;
+                }
+            }
+        }
+
+        float bcx = (x0 + x1) * 0.5F;
+        float bcy = (y0 + y1) * 0.5F;
+        float bcz = (z0 + z1) * 0.5F;
+        float s01 = randomBetween(random, -shear, shear) / Math.max(1.0F, sizeY);
+        float s02 = randomBetween(random, -shear, shear) / Math.max(1.0F, sizeZ);
+        float s12 = randomBetween(random, -shear, shear) / Math.max(1.0F, sizeZ);
+        for (int i = 0; i < 8; i++) {
+            float dx = corners[i * 3] - bcx;
+            float dy = corners[i * 3 + 1] - bcy;
+            float dz = corners[i * 3 + 2] - bcz;
+            corners[i * 3] = bcx + dx + s01 * dy + s02 * dz;
+            corners[i * 3 + 1] = bcy + dy + s12 * dz;
+            corners[i * 3 + 2] = bcz + dz + s12 * dx;
+        }
+
+        // Fold corners onto neighbours: quads collapse into triangles, so the chunk is an
+        // irregular debris wedge rather than a box.
+        int snaps = random.nextFloat() < 0.40F ? 1 : (random.nextFloat() < 0.30F ? 2 : 0);
+        for (int snap = 0; snap < snaps; snap++) {
+            int from = random.nextInt(8);
+            int to = from ^ (1 << random.nextInt(3));
+            corners[from * 3] = corners[to * 3];
+            corners[from * 3 + 1] = corners[to * 3 + 1];
+            corners[from * 3 + 2] = corners[to * 3 + 2];
+        }
+
+        Piece piece = new Piece(corners, bcx, bcy, bcz);
+        piece.cellsU[0] = cellCount(sizeX);
+        piece.cellsV[0] = cellCount(sizeZ);
+        piece.cellsU[1] = cellCount(sizeX);
+        piece.cellsV[1] = cellCount(sizeZ);
+        piece.cellsU[2] = cellCount(sizeX);
+        piece.cellsV[2] = cellCount(sizeY);
+        piece.cellsU[3] = cellCount(sizeX);
+        piece.cellsV[3] = cellCount(sizeY);
+        piece.cellsU[4] = cellCount(sizeY);
+        piece.cellsV[4] = cellCount(sizeZ);
+        piece.cellsU[5] = cellCount(sizeY);
+        piece.cellsV[5] = cellCount(sizeZ);
+
+        piece.rx = randomBetween(random, -3.0F, 3.0F);
+        piece.ry = randomBetween(random, -3.0F, 3.0F);
+        piece.rz = randomBetween(random, -3.0F, 3.0F);
+        piece.phase = random.nextFloat() * 6.2832F;
+        return piece;
+    }
+
+    private static int cellCount(float extent) {
+        return Math.max(1, Math.round(extent));
     }
 
     private static TextureAtlasSprite spriteOf(BlockState state) {
@@ -542,135 +821,6 @@ public final class VCosmicFragmentEffect {
         return false;
     }
 
-    private static Fragments buildFragments(int largeCount, Random random) {
-        Fragments fragments = new Fragments();
-        List<float[]> boxes = new ArrayList<>();
-        splitVolume(boxes, new float[]{0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F}, largeCount, random);
-
-        for (float[] box : boxes) {
-            Shard large = makeShard(box, random, 9.0F);
-            fragments.large.add(large);
-
-            List<float[]> smallBoxes = new ArrayList<>();
-            splitVolume(smallBoxes, box, 2, random);
-            for (float[] smallBox : smallBoxes) {
-                Shard small = makeShard(smallBox, random, 26.0F);
-                pieces(small, large);
-                fragments.small.add(small);
-            }
-        }
-        return fragments;
-    }
-
-    private static void pieces(Shard small, Shard parent) {
-        small.pushX = parent.pushX * 1.8F + small.pushX * 0.6F;
-        small.pushY = parent.pushY * 1.8F + small.pushY * 0.6F;
-        small.pushZ = parent.pushZ * 1.8F + small.pushZ * 0.6F;
-    }
-
-    /** Recursive guillotine split so the pieces really fill the block volume. */
-    private static void splitVolume(List<float[]> out, float[] box, int count, Random random) {
-        if (count <= 1) {
-            out.add(box);
-            return;
-        }
-        int axis = random.nextInt(3);
-        float t = 0.34F + random.nextFloat() * 0.32F;
-        float[] first = box.clone();
-        float[] second = box.clone();
-        if (axis == 0) {
-            float cut = box[0] + (box[3] - box[0]) * t;
-            first[3] = cut;
-            second[0] = cut;
-        } else if (axis == 1) {
-            float cut = box[1] + (box[4] - box[1]) * t;
-            first[4] = cut;
-            second[1] = cut;
-        } else {
-            float cut = box[2] + (box[5] - box[2]) * t;
-            first[5] = cut;
-            second[2] = cut;
-        }
-        int left = count / 2;
-        splitVolume(out, first, left, random);
-        splitVolume(out, second, count - left, random);
-    }
-
-    private static Shard makeShard(float[] box, Random random, float maxRotation) {
-        float[] corners = new float[24];
-        int index = 0;
-        for (int z = 0; z < 2; z++) {
-            for (int y = 0; y < 2; y++) {
-                for (int x = 0; x < 2; x++) {
-                    corners[index * 3] = jitter(box[x == 0 ? 0 : 3], 0.045F, random);
-                    corners[index * 3 + 1] = jitter(box[y == 0 ? 1 : 4], 0.045F, random);
-                    corners[index * 3 + 2] = jitter(box[z == 0 ? 2 : 5], 0.045F, random);
-                    index++;
-                }
-            }
-        }
-
-        // Shear around the piece centre so no face stays parallel to the block faces.
-        float bcx = (box[0] + box[3]) * 0.5F;
-        float bcy = (box[1] + box[4]) * 0.5F;
-        float bcz = (box[2] + box[5]) * 0.5F;
-        float s01 = randomBetween(random, -0.24F, 0.24F);
-        float s02 = randomBetween(random, -0.24F, 0.24F);
-        float s12 = randomBetween(random, -0.24F, 0.24F);
-        for (int i = 0; i < 8; i++) {
-            float dx = corners[i * 3] - bcx;
-            float dy = corners[i * 3 + 1] - bcy;
-            float dz = corners[i * 3 + 2] - bcz;
-            corners[i * 3] = Mth.clamp(bcx + dx + s01 * dy + s02 * dz, 0.0F, 1.0F);
-            corners[i * 3 + 1] = Mth.clamp(bcy + dy + s12 * dz, 0.0F, 1.0F);
-            corners[i * 3 + 2] = Mth.clamp(bcz + dz + s12 * dx, 0.0F, 1.0F);
-        }
-
-        // Fold corners onto their neighbours: quads collapse into triangles, so the piece
-        // reads as a broken wedge instead of a small cube.
-        int snaps = random.nextFloat() < 0.55F ? 1 : (random.nextFloat() < 0.30F ? 2 : 0);
-        for (int snap = 0; snap < snaps; snap++) {
-            int from = random.nextInt(8);
-            int to = from ^ (1 << random.nextInt(3));
-            corners[from * 3] = corners[to * 3];
-            corners[from * 3 + 1] = corners[to * 3 + 1];
-            corners[from * 3 + 2] = corners[to * 3 + 2];
-        }
-
-        float cx = 0.0F;
-        float cy = 0.0F;
-        float cz = 0.0F;
-        for (int i = 0; i < 8; i++) {
-            cx += corners[i * 3];
-            cy += corners[i * 3 + 1];
-            cz += corners[i * 3 + 2];
-        }
-        cx /= 8.0F;
-        cy /= 8.0F;
-        cz /= 8.0F;
-
-        float pushX = randomBetween(random, -1.0F, 1.0F);
-        float pushY = randomBetween(random, -0.4F, 1.0F);
-        float pushZ = randomBetween(random, -1.0F, 1.0F);
-        float length = Math.max(0.001F,
-                (float) Math.sqrt(pushX * pushX + pushY * pushY + pushZ * pushZ));
-
-        return new Shard(
-                corners, cx, cy, cz,
-                pushX / length, pushY / length, pushZ / length,
-                randomBetween(random, -maxRotation, maxRotation),
-                randomBetween(random, -maxRotation, maxRotation),
-                randomBetween(random, -maxRotation, maxRotation),
-                random.nextFloat() * 6.2832F,
-                0.5F + random.nextFloat()
-        );
-    }
-
-    private static float jitter(float value, float amount, Random random) {
-        float jittered = value + randomBetween(random, -amount, amount);
-        return Mth.clamp(jittered, 0.0F, 1.0F);
-    }
-
     private static float randomBetween(Random random, float min, float max) {
         return min + random.nextFloat() * (max - min);
     }
@@ -679,11 +829,11 @@ public final class VCosmicFragmentEffect {
     /* data holders                                                        */
     /* ------------------------------------------------------------------ */
 
-    /* Faces of a box, corner order: bit0 = x, bit1 = y, bit2 = z. */
+    /* Face corner order for a box: bit0 = x, bit1 = y, bit2 = z. */
     private static final int[] FACE_A = {2, 0, 4, 0, 1, 0};
     private static final int[] FACE_B = {3, 1, 5, 1, 3, 2};
-    private static final int[] FACE_C = {7, 5, 7, 3, 7, 6};
-    private static final int[] FACE_D = {6, 4, 6, 2, 5, 4};
+    private static final int[] FACE_D = {7, 5, 7, 3, 7, 6};
+    private static final int[] FACE_E = {6, 4, 6, 2, 5, 4};
     private static final float[] FACE_SHADE = {1.0F, 0.52F, 0.80F, 0.80F, 0.63F, 0.63F};
     private static final float[] FACE_NORMAL = {
             0, 1, 0,
@@ -693,59 +843,43 @@ public final class VCosmicFragmentEffect {
             1, 0, 0,
             -1, 0, 0
     };
-    /** 0 = top/bottom mapping, 1 = side mapping using x/y, 2 = side mapping using z/y. */
-    private static final int[] FACE_UV_AXIS = {0, 0, 2, 2, 1, 1};
 
-    private static final class Fragments {
-        final List<Shard> large = new ArrayList<>();
-        final List<Shard> small = new ArrayList<>();
-    }
-
-    private static final class BlockRecord {
-        final BlockPos pos;
+    private static final class Cluster {
         final BlockState state;
         final TextureAtlasSprite sprite;
-        final List<Shard> large;
-        final List<Shard> small;
+        final List<Piece> pieces = new ArrayList<>();
 
-        BlockRecord(BlockPos pos, BlockState state, TextureAtlasSprite sprite, Fragments fragments) {
-            this.pos = pos;
+        Cluster(BlockState state, TextureAtlasSprite sprite) {
             this.state = state;
             this.sprite = sprite;
-            this.large = fragments.large;
-            this.small = fragments.small;
         }
     }
 
-    private static final class Shard {
+    private static final class Piece {
         final float[] corners;
         final float cx;
         final float cy;
         final float cz;
-        float pushX;
-        float pushY;
-        float pushZ;
-        final float rx;
-        final float ry;
-        final float rz;
-        final float phase;
-        final float spin;
+        final int[] cellsU = new int[6];
+        final int[] cellsV = new int[6];
+        final List<Piece> children = new ArrayList<>();
+        final List<int[]> cells = new ArrayList<>();
+        float rx;
+        float ry;
+        float rz;
+        float phase;
+        float driftX;
+        float driftY;
+        float driftZ;
+        float outX;
+        float outY;
+        float outZ;
 
-        Shard(float[] corners, float cx, float cy, float cz,
-              float pushX, float pushY, float pushZ,
-              float rx, float ry, float rz, float phase, float spin) {
+        Piece(float[] corners, float cx, float cy, float cz) {
             this.corners = corners;
             this.cx = cx;
             this.cy = cy;
             this.cz = cz;
-            this.pushX = pushX;
-            this.pushY = pushY;
-            this.pushZ = pushZ;
-            this.rx = rx;
-            this.ry = ry;
-            this.rz = rz;
-            this.phase = phase;
-            this.spin = spin;
         }
     }
 }

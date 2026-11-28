@@ -602,12 +602,39 @@ public final class VCosmicFragmentEffect {
         for (int z = 0; z < 2; z++) {
             for (int y = 0; y < 2; y++) {
                 for (int x = 0; x < 2; x++) {
-                    corners[index * 3] = jitter(box[x == 0 ? 0 : 3], 0.035F, random);
-                    corners[index * 3 + 1] = jitter(box[y == 0 ? 1 : 4], 0.035F, random);
-                    corners[index * 3 + 2] = jitter(box[z == 0 ? 2 : 5], 0.035F, random);
+                    corners[index * 3] = jitter(box[x == 0 ? 0 : 3], 0.045F, random);
+                    corners[index * 3 + 1] = jitter(box[y == 0 ? 1 : 4], 0.045F, random);
+                    corners[index * 3 + 2] = jitter(box[z == 0 ? 2 : 5], 0.045F, random);
                     index++;
                 }
             }
+        }
+
+        // Shear around the piece centre so no face stays parallel to the block faces.
+        float bcx = (box[0] + box[3]) * 0.5F;
+        float bcy = (box[1] + box[4]) * 0.5F;
+        float bcz = (box[2] + box[5]) * 0.5F;
+        float s01 = randomBetween(random, -0.24F, 0.24F);
+        float s02 = randomBetween(random, -0.24F, 0.24F);
+        float s12 = randomBetween(random, -0.24F, 0.24F);
+        for (int i = 0; i < 8; i++) {
+            float dx = corners[i * 3] - bcx;
+            float dy = corners[i * 3 + 1] - bcy;
+            float dz = corners[i * 3 + 2] - bcz;
+            corners[i * 3] = Mth.clamp(bcx + dx + s01 * dy + s02 * dz, 0.0F, 1.0F);
+            corners[i * 3 + 1] = Mth.clamp(bcy + dy + s12 * dz, 0.0F, 1.0F);
+            corners[i * 3 + 2] = Mth.clamp(bcz + dz + s12 * dx, 0.0F, 1.0F);
+        }
+
+        // Fold corners onto their neighbours: quads collapse into triangles, so the piece
+        // reads as a broken wedge instead of a small cube.
+        int snaps = random.nextFloat() < 0.55F ? 1 : (random.nextFloat() < 0.30F ? 2 : 0);
+        for (int snap = 0; snap < snaps; snap++) {
+            int from = random.nextInt(8);
+            int to = from ^ (1 << random.nextInt(3));
+            corners[from * 3] = corners[to * 3];
+            corners[from * 3 + 1] = corners[to * 3 + 1];
+            corners[from * 3 + 2] = corners[to * 3 + 2];
         }
 
         float cx = 0.0F;

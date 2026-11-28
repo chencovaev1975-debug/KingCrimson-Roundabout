@@ -149,9 +149,9 @@ public final class VCosmicFragmentEffect {
                 // Fragments only drift apart a little and keep hovering in place.
                 float separate = 1.0F + 0.85F * spread;
                 float bob = 0.022F * Mth.sin(time * 2.4F + shard.phase);
-                float px = block.pos.getX() + 0.5F + shard.ox * separate - cameraPos.x;
-                float py = block.pos.getY() + 0.5F + shard.oy * separate + bob - cameraPos.y;
-                float pz = block.pos.getZ() + 0.5F + shard.oz * separate - cameraPos.z;
+                float px = (float) (block.pos.getX() + 0.5D + shard.ox * separate - cameraPos.x);
+                float py = (float) (block.pos.getY() + 0.5D + shard.oy * separate + bob - cameraPos.y);
+                float pz = (float) (block.pos.getZ() + 0.5D + shard.oz * separate - cameraPos.z);
 
                 poseStack.pushPose();
                 poseStack.translate(px, py, pz);
@@ -178,9 +178,9 @@ public final class VCosmicFragmentEffect {
         if (residual > 0.02F) {
             for (BlockRecord block : BLOCKS) {
                 for (Shard shard : block.large) {
-                    float px = block.pos.getX() + 0.5F + shard.ox * 1.85F - cameraPos.x;
-                    float py = block.pos.getY() + 0.5F + shard.oy * 1.85F - cameraPos.y;
-                    float pz = block.pos.getZ() + 0.5F + shard.oz * 1.85F - cameraPos.z;
+                    float px = (float) (block.pos.getX() + 0.5D + shard.ox * 1.85F - cameraPos.x);
+                    float py = (float) (block.pos.getY() + 0.5D + shard.oy * 1.85F - cameraPos.y);
+                    float pz = (float) (block.pos.getZ() + 0.5D + shard.oz * 1.85F - cameraPos.z);
                     poseStack.pushPose();
                     poseStack.translate(px, py, pz);
                     poseStack.mulPose(Axis.XP.rotationDegrees(shard.rx * 2.2F));
@@ -204,12 +204,12 @@ public final class VCosmicFragmentEffect {
                 float jitterY = shakeAmp * Mth.sin(time * (89.0F + shard.spinRate * 27.0F) + shard.phase * 1.7F);
                 float jitterZ = shakeAmp * Mth.sin(time * (63.0F + shard.spinRate * 37.0F) + shard.phase * 2.3F);
 
-                float px = block.pos.getX() + 0.5F + shard.ox + shard.dx * split * 0.34F
-                        + jitterX - cameraPos.x;
-                float py = block.pos.getY() + 0.5F + shard.oy + shard.dy * split * 0.34F
-                        + jitterY + rise - cameraPos.y;
-                float pz = block.pos.getZ() + 0.5F + shard.oz + shard.dz * split * 0.34F
-                        + jitterZ - cameraPos.z;
+                float px = (float) (block.pos.getX() + 0.5D + shard.ox + shard.dx * split * 0.34F
+                        + jitterX - cameraPos.x);
+                float py = (float) (block.pos.getY() + 0.5D + shard.oy + shard.dy * split * 0.34F
+                        + jitterY + rise - cameraPos.y);
+                float pz = (float) (block.pos.getZ() + 0.5D + shard.oz + shard.dz * split * 0.34F
+                        + jitterZ - cameraPos.z);
 
                 poseStack.pushPose();
                 poseStack.translate(px, py, pz);

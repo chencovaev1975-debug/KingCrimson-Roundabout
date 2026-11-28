@@ -3,6 +3,7 @@ from pathlib import Path
 root = Path(".")
 client = root / "common/src/main/java/net/hydra/jojomod/client/ClientUtil.java"
 renderer = root / "common/src/main/java/net/hydra/jojomod/mixin/ZLevelRenderer.java"
+hud = root / "common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java"
 
 
 def replace_once(path: Path, old: str, new: str, label: str) -> None:
@@ -13,8 +14,13 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
 
-# Disable Roundabout's stock floating terrain fragments. The custom fracture pass
-# below renders selected world blocks and its own non-rotating stone chips locally.
+# ---------------------------------------------------------------------------
+# 1. Remove the floating terrain scraps from Time Erase.
+#
+# Roundabout spawns TerrainFragments while King Crimson's Time Erase runs; those are
+# the "levitating blocks" that were drifting in the void. They are dropped here, and
+# any already spawned scrap is cleared every client tick, so Time Erase stays clean.
+# ---------------------------------------------------------------------------
 replace_once(
     client,
     """                if (PKC.isUsingTimeErase()){
@@ -23,14 +29,15 @@ replace_once(
                     }
                     isUsingTimeErase = true;""",
     """                if (PKC.isUsingTimeErase()){
-                    if (!isUsingTimeErase) {
-                        ClientEffectUtil.terrainFragments.clear();
-                    }
+                    ClientEffectUtil.terrainFragments.clear();
                     isUsingTimeErase = true;""",
-    "disable stock Time Erase terrain fragments"
+    "remove levitating terrain fragments from Time Erase",
 )
 
-# Keep ordinary chunks hidden; only the bounded client-side fracture snapshot is re-rendered.
+# ---------------------------------------------------------------------------
+# 2. Once the native Time Erase fade-in has finished, stop drawing world chunks so
+# the native cosmic skybox is the only background that is left.
+# ---------------------------------------------------------------------------
 replace_once(
     renderer,
     """        if (ClientUtil.isUnderRTZ() && ClientUtil.rtzTicks >= 4 && ClientUtil.rtzTicks < ClientUtil.RTZ_DURATION - 4) {
@@ -40,87 +47,24 @@ replace_once(
     """        if (ClientUtil.isUnderRTZ() && ClientUtil.rtzTicks >= 4 && ClientUtil.rtzTicks < ClientUtil.RTZ_DURATION - 4) {
             ci.cancel();
         }
-        if (ClientUtil.renderTimeErase()) {
+        if (ClientUtil.isUsingTimeErase && ClientUtil.TimeErase >= ClientUtil.fadeTime) {
             ci.cancel();
         }
     }""",
-    "hide normal world chunks during Time Erase"
+    "hide world chunks after the native Time Erase transition",
 )
 
-# Let the native Roundabout six-face skybox remain visible and keep clouds out of it.
-replace_once(
-    renderer,
-    "if (ClientUtil.isUsingTimeErase || ClientUtil.isUnderRTZ()) {",
-    "if (ClientUtil.renderTimeErase() || ClientUtil.isUnderRTZ()) {",
-    "hide clouds during the Time Erase skybox fade"
-)
-
-
-# Add the local-only fracture effect. The class is deliberately client-only and only
-# snapshots block states: it never edits blocks, entities, collision, or server state.
-fracture_class = root / "common/src/main/java/net/hydra/jojomod/client/TimeEraseFractureEffect.java"
-fracture_class.parent.mkdir(parents=True, exist_ok=True)
-fracture_source = Path(__file__).with_name("TimeEraseFractureEffect.java")
-if not fracture_source.exists():
-    raise SystemExit("Missing addon source: patches/TimeEraseFractureEffect.java")
-fracture_class.write_text(fracture_source.read_text(encoding="utf-8"), encoding="utf-8")
-
-# Start the effect on the local client's Time Erase rising edge, and let its own
-# 60-tick client timer finish independently of the server-side ability duration.
-replace_once(
-    client,
-    """                if (PKC.isUsingTimeErase()){
-                    if (!isUsingTimeErase) {
-                        ClientEffectUtil.terrainFragments.clear();
-                    }
-                    isUsingTimeErase = true;""",
-    """                if (PKC.isUsingTimeErase()){
-                    TimeEraseFractureEffect.tick(player, true);
-                    if (!isUsingTimeErase) {
-                        ClientEffectUtil.terrainFragments.clear();
-                    }
-                    isUsingTimeErase = true;""",
-    "start local Time Erase fracture effect"
-)
-replace_once(
-    client,
-    """                } else {
-                    isUsingTimeErase = false;
-                    if (TimeErase > -1){
-                        TimeErase--;
-                    }
-                }
-            } else {
-                isUsingTimeErase = false;
-                if (TimeErase > -1){
-                    TimeErase--;
-                }
-            }""",
-    """                } else {
-                    TimeEraseFractureEffect.tick(player, false);
-                    isUsingTimeErase = false;
-                    if (TimeErase > -1){
-                        TimeErase--;
-                    }
-                }
-            } else {
-                TimeEraseFractureEffect.tick(player, false);
-                isUsingTimeErase = false;
-                if (TimeErase > -1){
-                    TimeErase--;
-                }
-            }""",
-    "advance local Time Erase fracture timer"
-)
-
-# Wire the fracture renderer into the same sky-return pass as the existing client
-# terrain fragments. It renders after the native skybox and before the hidden terrain.
-if "import net.hydra.jojomod.client.TimeEraseFractureEffect;" not in renderer.read_text(encoding="utf-8"):
-    source = renderer.read_text(encoding="utf-8")
-    marker = "import net.hydra.jojomod.client.ClientUtil;"
-    if source.count(marker) != 1:
-        raise SystemExit("import TimeEraseFractureEffect: expected one ClientUtil import")
-    renderer.write_text(source.replace(marker, marker + "\nimport net.hydra.jojomod.client.TimeEraseFractureEffect;", 1), encoding="utf-8")
+# ---------------------------------------------------------------------------
+# 3. Hook the new V-key cosmic fracture effect into the same sky pass that already
+# renders Roundabout's own sky geometry, and pull in its class.
+# ---------------------------------------------------------------------------
+if "import net.hydra.jojomod.client.VCosmicFragmentEffect;" not in renderer.read_text(encoding="utf-8"):
+    replace_once(
+        renderer,
+        "import net.hydra.jojomod.client.ClientUtil;",
+        "import net.hydra.jojomod.client.ClientUtil;\nimport net.hydra.jojomod.client.VCosmicFragmentEffect;",
+        "import the V-key effect into the level renderer",
+    )
 
 replace_once(
     renderer,
@@ -130,43 +74,48 @@ replace_once(
                 $$3,
                 $$2
         );
-
-        buffer.method_22993();""",
+""",
     """        rdbt$renderTerrainFragments(
                 $$0,
                 buffer,
                 $$3,
                 $$2
         );
-        TimeEraseFractureEffect.render($$0, buffer, $$3, $$2);
-
-        buffer.method_22993();""",
-    "render local Time Erase block fractures and stone chips"
+        VCosmicFragmentEffect.renderWorld($$0, buffer, $$3, $$2);
+""",
+    "render the V-key cosmic fracture effect",
 )
 
-# Apply a strictly vertical, temporary pose offset at renderLevel HEAD and undo it
-# at TAIL. No camera yaw/pitch/FOV or player position is modified.
+# ---------------------------------------------------------------------------
+# 4. Draw the wide bright-pink sweep as a HUD overlay.
+# ---------------------------------------------------------------------------
+if "import net.hydra.jojomod.client.VCosmicFragmentEffect;" not in hud.read_text(encoding="utf-8"):
+    replace_once(
+        hud,
+        "import net.hydra.jojomod.client.StandIcons;",
+        "import net.hydra.jojomod.client.StandIcons;\nimport net.hydra.jojomod.client.VCosmicFragmentEffect;",
+        "import the V-key effect into the HUD renderer",
+    )
+
 replace_once(
-    renderer,
-    """        ClientUtil.mirrorCycles = 0;
+    hud,
+    """    private void roundabout$renderHotbarMixin(float $$0, GuiGraphics $$1, CallbackInfo info) {
+""",
+    """    private void roundabout$renderHotbarMixin(float $$0, GuiGraphics $$1, CallbackInfo info) {
 
-        roundabout$renderAnubisMemory($$1);""",
-    """        ClientUtil.mirrorCycles = 0;
-        TimeEraseFractureEffect.applyCameraShake($$0, $$1);
-
-        roundabout$renderAnubisMemory($$1);""",
-    "apply vertical Time Erase camera shake"
-)
-replace_once(
-    renderer,
-    """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
-
-    }""",
-    """        RenderCallbackRegistry.roundabout$LEVEL_RENDER_FINISH(partialTick);
-        TimeEraseFractureEffect.removeCameraShake($$0);
-
-    }""",
-    "restore render pose after Time Erase camera shake"
+        VCosmicFragmentEffect.renderScreenOverlay($$1);
+""",
+    "render the pink sweep overlay",
 )
 
-print("Applied: native Time Erase skybox plus local fracture wave, non-rotating stone chips, and a brief vertical shake.")
+# ---------------------------------------------------------------------------
+# 5. Copy the client-only effect implementation into the mod sources.
+# ---------------------------------------------------------------------------
+effect_source = Path(__file__).with_name("VCosmicFragmentEffect.java")
+if not effect_source.exists():
+    raise SystemExit("Missing addon source: patches/VCosmicFragmentEffect.java")
+effect_target = client.parent / "VCosmicFragmentEffect.java"
+effect_target.write_text(effect_source.read_text(encoding="utf-8"), encoding="utf-8")
+
+print("Applied: Time Erase keeps only the native cosmic void (no levitating blocks),")
+print("and pressing V plays the client-side pink sweep + block fracture effect.")

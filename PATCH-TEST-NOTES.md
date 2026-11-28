@@ -1,27 +1,65 @@
-# Time Erase fracture patch — verification notes
+# Cosmic fracture patch — verification notes
 
-## Implemented timeline
+## Patched files (by `patches/apply_patch.py`)
 
-- Ticks 0–5: capture six concentric 10-block rings, up to 4,200 exposed solid blocks in total.
-- Ticks 0–44: dark grey face cracks appear and spread outward from the player.
-- Ticks 42–48: irregular stone prisms grow outward from exposed block faces while the blocks are still rendered.
-- Tick 48 (2.40 s): the temporary block layer stops rendering, the chips detach, and a vertical-only camera shake begins.
-- Tick 60 (3.00 s): the chips have faded and the effect data is cleared.
+1. `common/src/main/java/net/hydra/jojomod/client/ClientUtil.java`
+   - the `ClientEffectUtil.spawnTerrainFragment(...)` call inside the King Crimson Time Erase
+     branch is removed and `ClientEffectUtil.terrainFragments.clear()` runs instead, so no
+     levitating blocks remain during Time Erase.
+2. `common/src/main/java/net/hydra/jojomod/mixin/ZLevelRenderer.java`
+   - world chunks stop rendering once the native Time Erase fade-in finished
+     (`ClientUtil.isUsingTimeErase && ClientUtil.TimeErase >= ClientUtil.fadeTime`);
+   - `VCosmicFragmentEffect.renderWorld(...)` is called right after the existing
+     `rdbt$renderTerrainFragments(...)` call in the sky pass, before `buffer.endBatch()`.
+3. `common/src/main/java/net/hydra/jojomod/mixin/HudRendering.java`
+   - `VCosmicFragmentEffect.renderScreenOverlay(...)` is called at the head of
+     `roundabout$renderHotbarMixin` for the pink sweep.
+4. New client-only class `common/src/main/java/net/hydra/jojomod/client/VCosmicFragmentEffect.java`
+   copied from `patches/VCosmicFragmentEffect.java`.
 
-The visual layer is client-side and does not write block states, send world-modification packets, alter collision, or change entity/ability behavior. It adds no sound. The native skybox and native Time Erase fade/return path are left in place.
+Every string replacement asserts exactly one match and aborts the build otherwise, so an
+upstream change cannot silently skip a hook.
 
-## Verification actually performed
+## Effect timeline
 
-- The patch script was applied successfully to a clean reconstruction of the two upstream source files from the supplied build's `sources.jar`, after reversing the existing addon patch. All new hooks and the new source file were verified in the result.
-- `TimeEraseFractureEffect.java` passed a Java 17 syntax/type-shape check against lightweight Minecraft API stubs.
-- `apply_patch.py` passed Python bytecode compilation.
+- Key press (ability-four key, V by default) is detected from `KeyMapping#isDown()` on a rising
+  edge, inside the render hook — no per-tick state and no keybind registration are needed.
+- 1.10–1.45 s: 32 stacked translucent slices form one very wide pink band moving bottom to top.
+- 2.00 s: snapshot (≤520 exposed blocks, 15-block radius, ±10 Y, reservoir sampled) is rendered
+  as 2–3 large fragments per block.
+- 2.00–2.60 s: fragments separate slightly and hover with a small sine bob.
+- 2.60 s: short cross-fade to smaller splinters (1–2 per large fragment) plus a three-axis
+  high-frequency shake and outward scatter.
+- 4.00–4.90 s: splinters scale to zero and drift upward, then the state is cleared.
+- The effect is dropped immediately if the level changes, or if it was started during Time
+  Erase and the ability ends.
 
-A full Gradle build against the pinned Roundabout checkout and an in-game test have **not** been run for this update. Run the repository's GitHub Actions workflow before treating this update as a verified Minecraft build.
+## Verification performed
 
-## Known visual tuning limit
+- `patches/apply_patch.py` was run locally against the pinned upstream sources
+  (`ClientUtil.java`, `ZLevelRenderer.java`, `HudRendering.java` from
+  `Hydraheads/RoundaboutMod@16ae85aa`) — all four patch points matched exactly once.
+- `patches/VCosmicFragmentEffect.java` passed a `javac` parse check (only expected
+  "package does not exist" / "cannot find symbol" errors for Minecraft classes, no syntax
+  errors).
+- Every Minecraft API used by the new class (`renderSingleBlock`, `RenderShape.MODEL`,
+  `canOcclude`, `getFluidState`, `getMinBuildHeight`/`getMaxBuildHeight`, `GuiGraphics#fill`,
+  `Util.getMillis`, `Mth.sin/clamp/floor`, `Camera#getPosition`, `LightTexture.FULL_BRIGHT`,
+  `OverlayTexture.NO_OVERLAY`) is already used elsewhere in the pinned Roundabout sources, so
+  the names and signatures match this exact revision.
 
-The crack lines currently use a neutral charcoal-grey tone. The crack-reference PNG was not included in the two uploaded ZIP files, so exact pixel/color matching to that image has not been verified.
+## Not verified here
 
-## Existing fade timing
+- A full Gradle build and an in-game look were not run locally. The GitHub Actions workflow
+  compiles the jar; treat the first green run as the compile check and tune amplitudes in
+  `VCosmicFragmentEffect` afterwards if the look needs adjusting.
 
-No independent 0.5-second post-effect delay was found in the inspected Time Erase logic. The existing 14-tick native fade-down controls both the skybox fade and the return of ordinary chunk rendering; it is intentionally unchanged so the world-return behavior is not disturbed.
+## Tuning knobs
+
+All in `VCosmicFragmentEffect.java`:
+
+- `STRIPE_START`, `STRIPE_END` — pink sweep timing.
+- `SHATTER_TIME`, `SHAKE_TIME`, `DISSOLVE_TIME`, `END_TIME` — fracture beats.
+- `RADIUS`, `VERTICAL_DOWN`, `VERTICAL_UP`, `MAX_BLOCKS` — snapshot size and therefore cost.
+- `largeCount`, `smallPerLarge` in `buildFragments` — fragment density.
+- `shakeAmp` in `renderShattered` — how violent the shake is.

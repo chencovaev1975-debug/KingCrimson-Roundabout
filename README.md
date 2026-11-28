@@ -31,10 +31,11 @@ Implementation notes:
   are only read, never written. The only cap is a 6000-block safety net far above a normal
   snapshot.
 - Fragments are real geometry, not miniature copies of the block: each block volume is cut by a
-  recursive guillotine split into irregular pieces, every corner is jittered, and the resulting
-  3D chunk is drawn with six textured faces taken from that block's own texture sprite with
-  vanilla-like face shading. Large chunks are split again into the smaller splinters of the
-  2.60 s beat.
+  recursive guillotine split into irregular pieces, every corner is jittered, each piece is
+  sheared around its own centre so no face stays parallel to the block faces, and corners are
+  then folded onto neighbours so quads collapse into triangles. The result is an angular wedge,
+  not a small cube, textured with that block's own sprite and vanilla-like face shading. Large
+  chunks are split again into the smaller splinters of the 2.60 s beat.
 - The shake of the 2.60 s beat is a **camera-style shake of the whole view** (pose offset applied
   at the head of the level render and undone at the tail); the fragments themselves no longer
   jitter.
